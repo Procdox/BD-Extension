@@ -185,15 +185,15 @@ export class ExprReader extends TokenReader {
       if(decl === undefined) {
         const bi_info = BUILTINS.get(ref_name);
         if(bi_info !== undefined){
-          cur_ref.type_data.setSrc(bi_info);
+          cur_ref.type_data.setSrc(bi_info,false,true);
         }
         else {
-          cur_ref.type_data.setSrc({t:BDType.Unknown});
+          cur_ref.type_data.setSrc({t:BDType.Unknown},false,true);
           issues.push({l:actual_line, t:cur_ref.token, m:"Reference to undeclared variable"});
         }
       }
       else {
-        cur_ref.type_data.copySrc(decl.type_data.used);
+        cur_ref.type_data.setRef(decl);
       }
     }
   }
@@ -218,12 +218,19 @@ export class ExprReader extends TokenReader {
     if(src_node === undefined) return;
 
     if(prop_name !== undefined) {
-      src_node.type_data.used.addProp(prop_name, expr_info);
-      src_node.type_data.modifies = true
+      const src_dict = src_node.type_data.used.ease(BDType.Object);
+      if(src_dict){
+        if(src_dict.addProp(prop_name, expr_info)){
+          src_node.type_data.modifies = true;
+          (src_dict.ctx as NodeTypeData).markDirty(false,true);
+        }
+      }
     }
     else {
-      src_node.type_data.used.union(expr_info);
-      src_node.type_data.modifies = true
+      if(src_node.type_data.used.union(expr_info)){
+        src_node.type_data.modifies = true;
+        (src_node.type_data.used.ctx as NodeTypeData).markDirty(false,true);
+      }
     }
   }
   eval() : TypeInst {
@@ -239,35 +246,43 @@ export class NodeTypeData extends TypeData {
   node:ExprNode;
   tokens:Token[];
   modifies:boolean = false;
-  ref:Maybe<NodeTypeData> = undefined;
+  tref:Maybe<NodeTypeData> = undefined;
+  nref:Maybe<ExprNode> = undefined;
   refers:NodeTypeData[] = [];
   constructor(node:ExprNode, token:Token){
     super();
     this.node = node;
     this.tokens = [token];
   }
+  markDirty(self:boolean, refers:boolean){
+    if(self) this.node.markDirty();
+    if(refers) this.refers.forEach((r)=>{
+      r.node.markDirty();
+    });
+  }
   clearEffects(){
-    if(this.ref !== undefined){
-      this.ref.refers.splice(this.ref.refers.indexOf(this), 1);
+    if(this.tref !== undefined){
+      this.tref.refers.splice(this.tref.refers.indexOf(this), 1);
       if(this.modifies){
-        this.ref.node.markDirty();
+        this.tref.markDirty(true, false);
       }
     }
     this.modifies = false;
-    this.ref = undefined;
+    this.tref = undefined;
+    this.nref = undefined;
   }
-  setSrc(info:AnyInfo|TypeInst, force_clone:boolean=false){
+  setSrc(info:AnyInfo|TypeInst, force_clone:boolean=false, mark_self:boolean=false){
     if(!force_clone && info instanceof TypeInst){
       const t = info.getT();
       if(t == BDType.Object || t == BDType.List || t == BDType.Union || t == BDType.FuncRef){
-        return this.copySrc(info);
+        return this.copySrc(info, mark_self);
       }
     }
     
     this.clearEffects();
     if(info instanceof TypeInst) {
-      this.ref = info.ctx as NodeTypeData;
-      this.ref.refers.push(this);
+      this.tref = info.ctx as NodeTypeData;
+      this.tref.refers.push(this);
     }
 
     this.src = info
@@ -275,21 +290,27 @@ export class NodeTypeData extends TypeData {
     this.tokens.forEach((t)=>{ 
       t.hover_info = this.used;
     });
-    this.refers.forEach((r)=>r.node.markDirty());
+    this.markDirty(mark_self, !mark_self);
+    return true;
   }
-  copySrc(info:TypeInst){
-    if(info === this.used) return;
+  copySrc(info:TypeInst, mark_self:boolean=false){
+    if(info === this.used) return false;
 
     this.clearEffects();
-    this.ref = info.ctx as NodeTypeData;
-    this.ref.refers.push(this);
+    this.tref = info.ctx as NodeTypeData;
+    this.tref.refers.push(this);
     
     this.src = info
     this.used = info;
     this.tokens.forEach((t)=>{ 
       t.hover_info = this.used;
     });
-    this.refers.forEach((r)=>r.node.markDirty());
+    this.markDirty(mark_self, !mark_self);
+    return true;
+  }
+  setRef(node:ExprNode){
+    this.copySrc(node.type_data.used, true);
+    this.nref = node;
   }
 }
 
@@ -299,9 +320,13 @@ export abstract class ExprNode {
   children:ExprNode[] = [];
   eval_dirty:boolean = true;
   type_data:NodeTypeData;
+  list_injected:Maybe<NodeTypeData> = undefined;
   addChild(child:ExprNode){
     child.parent = this;
     this.children.push(child);
+  }
+  setHover(inst:TypeInst){
+    this.type_data.tokens.forEach(t=>t.hover_info=inst);
   }
   constructor(token:Token){ 
     this.token = token; 
@@ -332,6 +357,10 @@ export abstract class ExprNode {
   teardown(){
     this.type_data.clearEffects();
     this.children.forEach(c=>c.teardown());
+    if(this.list_injected){
+      this.list_injected.markDirty(true,false);
+      this.list_injected = undefined;
+    }
   }
   abstract eval() : void;
   
@@ -352,9 +381,13 @@ export class ErrNode extends ExprNode {
 export class NameNode extends ExprNode {
   constructor(token:Token){
     super(token);
-    token.errorIfNot([TokenType.Name]);
+    token.errorIfNot([TokenType.Name, TokenType.String]);
   }
-  eval() {}
+  eval() {
+    if(this.type_data.nref){
+      this.type_data.setRef(this.type_data.nref);
+    }
+  }
 };
 
 export const NULL_TOKEN = new Token(0,0,TokenType.Null,"");
@@ -392,26 +425,25 @@ class ListNode extends ExprNode {
     let type_options:TypeInst[] = [];
     for(let idx = 0; idx < this.elements.length; idx++){
       const elem = this.elements[idx];
-      if(elem.type_data.is(BDType.Unknown)){
+      if(elem.type_data.isUnknown()){
         type_options = [];
         break;
       }
-      if(!type_options.some(old=>old.cmp(elem.type_data.used))){
-        type_options.push(elem.type_data.used);
+      if(elem.type_data.ease(BDType.Union)){
+        elem.type_data.used.alts()!.forEach((alt)=>{
+          if(!type_options.some(old=>old.cmp(elem.type_data.used))){
+            type_options.push(elem.type_data.used);
+          }
+        })
+      }
+      else {
+        if(!type_options.some(old=>old.cmp(elem.type_data.used))){
+          type_options.push(elem.type_data.used);
+        }
       }
     }
-    let elem_type:AnyInfo|TypeInst;
-    if(type_options.length == 0){
-      elem_type = {t:BDType.Unknown};
-    }
-    else if(type_options.length == 1){
-      elem_type = type_options[0];
-    }
-    else {
-      elem_type = {t:BDType.Union, alts:type_options};
-    }
     
-    this.type_data.setSrc({t:BDType.List, elem:elem_type});
+    this.type_data.setSrc({t:BDType.List, elem:{t:BDType.Union, alts:type_options}});
   }
 };
 class DictNode extends ExprNode {
@@ -451,37 +483,71 @@ class CallNode extends ExprNode {
     this.args.forEach(arg=>this.addChild(arg));
   }
   eval() {
-    this.type_data.setSrc({t:BDType.Unknown});
-    if(this.src instanceof NameNode){
-      if(this.src.type_data.is(BDType.Unknown)){
-        this.type_data.setSrc({t:BDType.Unknown});
-        return;
+    if(this.list_injected){
+      this.list_injected.markDirty(true, false);
+      this.list_injected = undefined;
+    }
+    if(this.src.type_data.isUnknown()){
+      this.type_data.setSrc({t:BDType.Unknown});
+      return;
+    }
+    const func_info = this.src.type_data.used.func();
+    if(func_info === undefined) {
+      this.type_data.setSrc({t:BDType.Unknown});
+      this.token.temp_issues.push(`${this.src.token.content()} is not a function`);
+      return;
+    }
+    this.type_data.setSrc(func_info.ret, true);
+    
+    for(let idx = 0; idx < func_info.args.length; idx++){
+      const api = func_info.args[idx];
+      if(idx >= this.args.length){
+        if(api.opt !== true) this.token.temp_issues.push("Incorrect number of args");
+        break;
       }
-      const func_info = this.src.type_data.used.func();
-      if(func_info === undefined) {
-        this.type_data.setSrc({t:BDType.Unknown});
-        this.token.temp_issues.push(`${this.src.token.content()} is not a function`);
-        return;
-      }
-      this.type_data.setSrc(func_info.ret, true);
-      
-      for(let idx = 0; idx < func_info.args.length; idx++){
-        const api = func_info.args[idx];
-        if(idx >= this.args.length){
-          if(api.opt !== true) this.token.temp_issues.push("Incorrect number of args");
-          break;
-        }
-        if(api.wants == BDType.Unknown) continue;
-        const used = this.args[idx];
-        if(api.wants instanceof Array){
-          if(!api.wants.some(api_t => used.type_data.canBe(api_t))){
-            const expect_str = api.wants.map(api_t=>BDTypeNames[api_t]).join("/");
-            used.token.temp_issues.push(`Incorrect arg type. Expected ${expect_str}}`);
+      if(api.wants == BDType.Unknown) continue;
+      const used = this.args[idx];
+      if(used.type_data.isUnknown()) continue;
+      let arg_ease:Maybe<TypeInst>;
+      if(api.wants instanceof Array){
+        if(!api.wants.some(api_t => {
+          if((arg_ease = used.type_data.ease(api_t)) !== undefined){
+            used.setHover(arg_ease);
+            return true;
           }
+          return false;
+        })){
+          const expect_str = api.wants.map(api_t=>BDTypeNames[api_t]).join("/");
+          used.token.temp_issues.push(`Incorrect arg type. Expected ${expect_str}}`);
+        }
+      }
+      else {
+        if((arg_ease = used.type_data.ease(api.wants)) !== undefined){
+          used.setHover(arg_ease);
         }
         else {
-          if(!used.type_data.canBe(api.wants)){
+          if(!used.type_data.ease(api.wants)){
             used.token.temp_issues.push(`Incorrect arg type. Expected ${BDTypeNames[api.wants]}`);
+          }
+        }
+      }
+    }
+
+    // Special Case - Inject Type Data for list.append and list.insert
+    if(this.src instanceof PropertyNode){
+      const src_list = this.src.src.type_data.ease(BDType.List);
+      if(src_list){
+        const prop_name = this.src.property.content();
+        if(prop_name == "append"){
+          if(this.args.length > 0 && !this.args[0].type_data.isUnknown()){
+            this.list_injected = src_list.ctx as NodeTypeData;
+            src_list.elem()!.union(this.args[0].type_data.used);
+          }
+        }
+        else if(prop_name == "insert"){
+          if(this.args.length > 1 && !this.args[1].type_data.isUnknown()){
+            this.list_injected = src_list.ctx as NodeTypeData;
+            src_list.elem()!.union(this.args[1].type_data.used);
           }
         }
       }
@@ -503,27 +569,29 @@ export class IndexNode extends ExprNode {
   eval() {
     let best_info:AnyInfo|TypeInst = {t:BDType.Unknown};
     const src_info = this.src.type_data;
-    const num_index = this.index.type_data.canBe(BDType.Number);
-    const str_index = this.index.type_data.canBe(BDType.String);
-    if(src_info.is(BDType.List)){
+    const unk_index = this.index.type_data.isUnknown();
+    const num_index = unk_index || this.index.type_data.ease(BDType.Number);
+    const str_index = unk_index || this.index.type_data.ease(BDType.String);
+    let src_ease:TypeInst|undefined;
+    if((src_ease = src_info.ease(BDType.List)) !== undefined){
       if(!num_index){
         this.index.token.temp_issues.push("Indexes must be numbers for lists");
       }
-      best_info = src_info.used.elem()!;
+      best_info = src_ease.elem()!;
     }
-    else if(src_info.is(BDType.String)){
+    else if(src_info.ease(BDType.String)){
       if(!num_index){
         this.index.token.temp_issues.push("Indexes must be numbers for strings");
       }
       best_info = {t:BDType.String};
     }
-    else if(src_info.is(BDType.Object)){
+    else if((src_ease = src_info.ease(BDType.Object)) !== undefined){
       if(!str_index){
         this.index.token.temp_issues.push("Indexes must be strings for objects");
       }
       else if(this.index instanceof RawNode) {
         const prop_name = this.index.token.content();
-        const prop_info = src_info.used.props()!.get(prop_name)
+        const prop_info = src_ease.props()!.get(prop_name)
         if(prop_info === undefined){
           this.index.token.temp_issues.push(`Object property ${prop_name} wasn't found`);
         }
@@ -536,7 +604,7 @@ export class IndexNode extends ExprNode {
       if(!str_index && !num_index){
         this.index.token.temp_issues.push("Indexes must be either strings for objects, or numbers for lists/strings");
       }
-      if(!src_info.is(BDType.Unknown)){
+      if(!src_info.isUnknown()){
         this.index.token.temp_issues.push("Indexes are only valid for lists, objects, and strings");
       }
     }
@@ -560,55 +628,56 @@ export class PropertyNode extends ExprNode {
   }
   eval() {
     this.property.temp_issues = [];
-    if(this.src.type_data.canBe(BDType.Unknown)) {
+    if(this.src.type_data.isUnknown()) {
       this.type_data.setSrc({t:BDType.Unknown});
       return;
     }
     
-    const maybe_list = this.src.type_data.canBe(BDType.List);
-    const maybe_dict = this.src.type_data.canBe(BDType.Object);
-    const maybe_string = this.src.type_data.canBe(BDType.String);
-    if(!maybe_dict && !maybe_list && !maybe_string) {
-      this.property.temp_issues.push("Properties can only be taken from lists, objects, and strings");
+    const src_list = this.src.type_data.ease(BDType.List);
+    const src_dict = this.src.type_data.ease(BDType.Object);
+    const src_string = this.src.type_data.ease(BDType.String);
+    if(!src_list && !src_dict && !src_string) {
+      if(!this.src.type_data.isUnknown()){
+        this.property.temp_issues.push("Properties can only be taken from lists, objects, and strings");
+      }
       this.type_data.setSrc({t:BDType.Unknown});
       return;
     }
 
     const prop_name = this.property.content();
     
-    if(maybe_list){
+    if(src_list){
       const bi_info = LIST_PROPS.get(prop_name);
       if(bi_info !== undefined){
-        if(prop_name == "pop" && this.src.type_data.is(BDType.List)){
-          const elem = this.src.type_data.used.elem()!;
+        if(prop_name == "pop"){
+          const elem = src_list.elem()!;
           this.type_data.setSrc({...bi_info, ret:elem})
         }
         else {
           this.type_data.setSrc(bi_info);
         }
+        this.src.setHover(src_list);
         return;
       }
     }
-    if(maybe_dict){
-      const bi_info = DICT_PROPS.get(prop_name);
-      if(bi_info !== undefined){
-        this.type_data.setSrc(bi_info);
-        return;
-      }
-    }
-    if(maybe_string){
+    if(src_string){
       const bi_info = STRING_PROPS.get(prop_name);
       if(bi_info !== undefined){
+        this.src.setHover(src_string);
         this.type_data.setSrc(bi_info);
         return;
       }
     }
-    
-
-    const src_info = this.src.type_data;
-    if(src_info.is(BDType.Object)){
-      const user_info = src_info.used.props()!.get(prop_name);
+    if(src_dict){
+      const bi_info = DICT_PROPS.get(prop_name);
+      if(bi_info !== undefined){
+        this.src.setHover(src_dict);
+        this.type_data.setSrc(bi_info);
+        return;
+      }
+      const user_info = src_dict.props()!.get(prop_name);
       if(user_info !== undefined){
+        this.src.setHover(src_dict);
         this.type_data.setSrc(user_info);
         return;
       }
@@ -629,15 +698,16 @@ class UnaryNode extends ExprNode {
     }
   }
   eval() {
+    const rt = this.right.type_data;
     if(this.token.group == TokenType.Not){
       // TODO: implicit truth casting?
-      if(!this.right.type_data.canBe(BDType.Number)){
+      if(!rt.ease(BDType.Bool) && !rt.isUnknown()){
         this.right.token.temp_issues.push("Expected Boolean");
       }
       this.type_data.setSrc({t:BDType.Bool});
     }
     else {
-      if(!this.right.type_data.canBe(BDType.Number)){
+      if(!rt.ease(BDType.Number) && !rt.isUnknown()){
         this.right.token.temp_issues.push("Expected Number");
       }
       this.type_data.setSrc({t:BDType.Number});
@@ -661,17 +731,19 @@ class BinaryNode extends ExprNode {
     }
   }
   eval() {
+    const lt = this.left.type_data;
+    const rt = this.right.type_data;
     if(this.token.group == TokenType.Add){
-      if(this.left.type_data.canBe(BDType.String) || this.left.type_data.canBe(BDType.String)){
+      if(lt.ease(BDType.String) || rt.ease(BDType.String)){
         this.type_data.setSrc({t:BDType.String});
         return;
       }
     }
     if(this.token.group <= TokenType.RShift){
-      if(!this.left.type_data.canBe(BDType.Number)){
+      if(!lt.ease(BDType.Number) && !lt.isUnknown()){
         this.left.token.temp_issues.push("Expected Number");
       }
-      if(!this.right.type_data.canBe(BDType.Number)){
+      if(!rt.ease(BDType.Number) && !rt.isUnknown()){
         this.right.token.temp_issues.push("Expected Number");
       }
       this.type_data.setSrc({t:BDType.Number});
@@ -697,14 +769,20 @@ class TernaryNode extends ExprNode {
     this.addChild(this.false_clause);
   }
   eval() {
-    if(!this.condition.type_data.canBe(BDType.Bool)){
+    const ct = this.condition.type_data;
+    const tt = this.true_clause.type_data;
+    const ft = this.false_clause.type_data;
+    if(!ct.ease(BDType.Bool) && !ct.isUnknown()){
       this.condition.token.temp_issues.push("Expected Boolean");
     }
-    if(this.true_clause.type_data.used == this.false_clause.type_data.used){
-      this.type_data.setSrc(this.true_clause.type_data.used);
+    if(tt.isUnknown() || ft.isUnknown()){
+      this.type_data.setSrc({t:BDType.Unknown});
+    }
+    else if(tt.used.cmp(ft.used)){
+      this.type_data.setSrc(tt.used);
     }
     else {
-      this.type_data.setSrc({t:BDType.Unknown});
+      this.type_data.setSrc({t:BDType.Union, alts:[tt.used,ft.used]});
     }
   }
 }; 

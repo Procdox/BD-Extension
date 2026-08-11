@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
 import { AnyInfo, ArgInfo, BDType, TokenNames, TokenType, TypeInst } from "./enums";
-import { ExprReader, IndexNode, NameNode, PropertyNode, } from './parse_expr';
+import { ExprReader, IndexNode, NameNode, NodeTypeData, PropertyNode, } from './parse_expr';
 import { BUILTINS } from './builtins';
 import { Token, Tokenized } from './parse_tokens';
 import { Statement } from './parse_stmt';
@@ -56,6 +56,7 @@ export class Scope {
   indent:number;
   unknown_refs:NameNode[] = [];
   issues:{l:number, t:Token, m:string}[] = [];
+  return_type:Maybe<TypeInst> = undefined;
   
   constructor(t:ScopeType, indent:number, parent?:Scope){
     this.t = t;
@@ -65,6 +66,7 @@ export class Scope {
   }
   private solve(tracker:DeclTracker){
     tracker.enterScope();
+    let last_stmt_type:TokenType = TokenType.Var;
     for(let child_idx = 0; child_idx < this.children.length; child_idx++){
       const focus = this.children[child_idx];
       if(focus instanceof Scope) {
@@ -92,9 +94,25 @@ export class Scope {
         //dm(`VarType: ${BDTypeNames[typeof expr_result === "number" ? expr_result : expr_result.t]} ... ${focus.text}`)
       }
       if(stmt.t == TokenType.For){
-        if(expr_result instanceof TypeInst && expr_result.getT() == BDType.List){
-          const elem = expr_result.elem()! 
+        let expr_list:Maybe<TypeInst>;
+        if(expr_result instanceof TypeInst && (expr_list = expr_result.ease(BDType.List)) !== undefined){
+          const elem = expr_list.elem()! 
           stmt.inner_declares.forEach((decl)=>decl.type_data.setSrc(elem));
+        }
+      }
+      else if(stmt.t == TokenType.Elif || stmt.t == TokenType.Else){
+        if(last_stmt_type != TokenType.If && last_stmt_type != TokenType.Elif){
+          stmt.tokens[0].temp_issues.push("Elif/Else statement must follow an If/Elif statment");
+        }
+        else {
+          stmt.tokens[0].temp_issues = [];
+        }
+      }
+      else if(stmt.t == TokenType.Return){
+        if(this.return_type && expr_result instanceof TypeInst && !expr_result.isUnknown()){
+          if(this.return_type.union(expr_result)){
+            (this.return_type.ctx as NodeTypeData).markDirty(false,true);
+          }
         }
       }
       else if(stmt.t == TokenType.Func){
@@ -104,7 +122,7 @@ export class Scope {
           stmt.inner_declares.forEach((arg)=>{
             func_args.push({name:arg.token.content(), wants:BDType.Unknown});
           })
-          expr_result = {t:BDType.FuncRef, name:func_name, description:"", args:func_args, ret:{t:BDType.Unknown}};
+          expr_result = {t:BDType.FuncRef, name:func_name, description:"", args:func_args, ret:{t:BDType.Union, alts:[]}};
         }
       }
       stmt.outer_declares.forEach((decl)=>{
@@ -123,12 +141,14 @@ export class Scope {
               tracker.set(decl.token.content(), decl);
             });
           }
+          flow_scope.return_type = this.return_type;
           flow_scope.solve(tracker);
           if(stmt.inner_declares.length > 0){
             tracker.exitScope();
           }
         }
       }
+      last_stmt_type = stmt.t;
     }
 
     for(let child_idx = 0; child_idx < this.children.length-1; child_idx++){
@@ -145,6 +165,10 @@ export class Scope {
               tracker.set(decl.token.content(), decl);
             });
           }
+          func_scope.return_type = undefined;
+          if(stmt.outer_declares.length > 0){
+            func_scope.return_type = stmt.outer_declares[0].type_data.used.func()!.ret;
+          }
           func_scope.solve(tracker);
           if(stmt.inner_declares.length > 0){
             tracker.exitScope();
@@ -154,9 +178,45 @@ export class Scope {
     }
     tracker.exitScope();
   }
+  secondPass(){
+    // doesn't resolve references, but lets updated / reassigned types resolve
+    for(let child_idx = 0; child_idx < this.children.length; child_idx++){
+      const focus = this.children[child_idx];
+      if(focus instanceof Scope){
+        focus.secondPass();
+      }
+      else if(focus.stmt){
+        const stmt = focus.stmt;
+        let expr_result:AnyInfo|TypeInst = {t:BDType.Unknown};
+        if(stmt.rval_expr) {
+          expr_result = stmt.rval_expr.eval();
+        }
+        if(stmt.lval_expr) {
+          stmt.lval_expr.evalRvalTarget(expr_result);
+          stmt.lval_expr.eval();
+        }
+        if(stmt.t == TokenType.Var){
+          stmt.outer_declares.forEach((decl)=>{
+            if(decl.type_data.isUnknown()){
+              decl.type_data.setSrc(expr_result);
+            }
+          });
+        }
+        if(stmt.t == TokenType.Return){
+          if(this.return_type && expr_result instanceof TypeInst && !expr_result.isUnknown()){
+            if(this.return_type.union(expr_result)){
+              (this.return_type.ctx as NodeTypeData).markDirty(false,true);
+            }
+          }
+        }
+      }
+    }
+
+  }
   doSolve(){
     const tracker = new DeclTracker();
     this.solve(tracker);
+    this.secondPass()
   }
   buildIssues(all_issues:vscode.Diagnostic[]){
     this.issues.forEach(my_issue =>{

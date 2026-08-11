@@ -150,7 +150,30 @@ export class TypeInst {
       }
     }
   }
-  getT() { return this.t; }
+  flattenUnion(try_for?:BDType) : TypeInst {
+    if(this.t == BDType.Union){
+      const alts = (this.data as TypeInst[]);
+      if(alts.length == 1) {
+        return alts[0].flattenUnion(try_for);
+      }
+      else if(alts.length > 0 && try_for !== undefined){
+        let matches = alts.map(alt => alt.flattenUnion(try_for)).filter(alt=>alt.t == try_for);
+        if(matches.length == 1) return matches[0];
+      }
+    }
+    return this;
+  }
+  ease(t:BDType){
+    const f = this.flattenUnion(t);
+    if(f.t == t) return f;
+  }
+  isUnknown(){
+    const f = this.flattenUnion(BDType.Unknown);
+    return f.t === BDType.Unknown || (f.t === BDType.Union && (f.data as TypeInst[]).length == 0);
+  }
+  getT() { 
+    return this.flattenUnion().t;
+  }
   props() {
     return this.t === BDType.Object ? (this.data as Map<string,TypeInst>) : undefined;
   }
@@ -162,14 +185,6 @@ export class TypeInst {
   }
   alts() {
     return this.t === BDType.Union ? (this.data as TypeInst[]) : undefined;
-  }
-
-  canBe(test:BDType) : boolean {
-    if(this.t == test || this.t == BDType.Unknown) return true;
-    if(this.t == BDType.Union){
-      return (this.data as TypeInst[]).some((alt)=>alt.canBe(test));
-    }
-    return false;
   }
   private cmpInst(other:TypeInst) : boolean {
     if(this === other) return true;
@@ -193,6 +208,7 @@ export class TypeInst {
     else if(this.t == BDType.Union){
       const t_alts = (this.data as TypeInst[]);
       const o_alts = (other.data as TypeInst[]);
+      if(t_alts.length != o_alts.length) return false;
       for(let t_alt of t_alts){
         if(!o_alts.some((o_alt)=>t_alt.cmpInst(o_alt))) return false;
       }
@@ -221,6 +237,7 @@ export class TypeInst {
     else if(this.t == BDType.Union){
       const t_alts = (this.data as TypeInst[]);
       const o_alts = (other as UnionInfo).alts;
+      if(t_alts.length != o_alts.length) return false;
       for(let t_alt of t_alts){
         if(!o_alts.some((o_alt)=>t_alt.cmp(o_alt))) return false;
       }
@@ -229,73 +246,86 @@ export class TypeInst {
     return true;
   }
   cmp(other:AnyInfo|TypeInst){
-    if(other instanceof TypeInst) return this.cmpInst(other);
-    else return this.cmpInfo(other);
+    return (other instanceof TypeInst) ? this.cmpInst(other) : this.cmpInfo(other);
   }
-  private unionInst(other:TypeInst){
+  private unionInst(other:TypeInst) : boolean {
     if(this.t === BDType.Unknown) {
-      return;
+      return false;
     }
     if(other.t === BDType.Unknown){
       this.t = BDType.Unknown;
       this.data = undefined;
-      return;
+      return true;
     }
-    if(this.cmpInst(other)) return;
+    if(this.cmpInst(other)) return false;
+
+    let altered = false;
     if(this.t !== BDType.Union){
       const clone = new TypeInst(this.ctx, {t:BDType.Unknown}, false);
       clone.t = this.t;
       clone.data = this.data;
       this.t = BDType.Union;
       this.data = [clone];
+      altered = true;
     }
 
     const t_alts = (this.data as TypeInst[]);
     if( other.t === BDType.Union) {
-      const o_alts = (other.data as TypeInst[]);
-      o_alts.forEach((o_alt)=>this.unionInst(o_alt));
+      const old_length = t_alts.length;
+      (other.data as TypeInst[]).forEach((o_alt)=>this.unionInst(o_alt));
+      altered = altered || (old_length != t_alts.length);
     }
     else if(!t_alts.some((t_alt)=>t_alt.cmpInst(other))){
       t_alts.push(other);
+      altered = true;
     }
+    return altered;
   }
-  private unionInfo(other:AnyInfo){
+  private unionInfo(other:AnyInfo) : boolean {
     if(this.t === BDType.Unknown) {
-      return;
+      return false;
     }
     if(other.t === BDType.Unknown){
       this.t = BDType.Unknown;
       this.data = undefined;
-      return;
+      return true;
     }
-    if(this.cmpInfo(other)) return;
+    if(this.cmpInfo(other)) return false;
+
+    let altered = false;
     if(this.t !== BDType.Union){
       const clone = new TypeInst(this.ctx, {t:BDType.Unknown}, false);
       clone.t = this.t;
       clone.data = this.data;
       this.t = BDType.Union;
       this.data = [clone];
+      altered = true;
     }
 
     const t_alts = (this.data as TypeInst[]);
     if( other.t === BDType.Union) {
+      const old_length = t_alts.length;
       other.alts.forEach((o_alt)=>this.union(o_alt));
+      altered = altered || (old_length != t_alts.length);
     }
     else if(!t_alts.some((t_alt)=>t_alt.cmpInfo(other))){
       t_alts.push(new TypeInst(this.ctx,other, false));
+      altered = true;
     }
+    return altered;
   }
-  union(other:TypeInst|AnyInfo){
-    if(other instanceof TypeInst) this.unionInst(other);
-    else this.unionInfo(other);
+  union(other:TypeInst|AnyInfo) : boolean {
+    return (other instanceof TypeInst) ? this.unionInst(other) : this.unionInfo(other);
   }
   addProp(prop_name:string, prop_expr:TypeInst|AnyInfo){
     const props = this.props();
-    if(props === undefined) return;
+    if(props === undefined) return false;
+    if(props.get(prop_name)) return false;
     if(!(prop_expr instanceof TypeInst)){
       prop_expr = new TypeInst(this.ctx, prop_expr, false);
     }
     props.set(prop_name, prop_expr);
+    return true;
   }
 };
 
@@ -306,10 +336,6 @@ export class TypeData {
     this.src = {t:BDType.Unknown};
     this.used = new TypeInst(this, this.src, false);
   }
-  canBe(t:BDType){
-    return this.used.canBe(t);
-  }
-  is(t:BDType){
-    return this.used.getT() === t;
-  }
+  ease(t:BDType){ return this.used.ease(t); }
+  isUnknown(){ return this.used.isUnknown(); }
 };

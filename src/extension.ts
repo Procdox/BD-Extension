@@ -133,6 +133,33 @@ function fmtUnionInfo(info:TypeInst){
   return "Union["+info.alts()!.map(alt=>BDTypeNames[alt.getT()]).join(", ")+"]"
 }
 
+function buildTypeName(info:TypeInst, depth:number) : string {
+  const f = info.flattenUnion();
+  const t = f.getT();
+  if(depth > 0) {
+    if(t === BDType.Union){
+      if(f.alts()!.length == 0) return "(/)";
+      return ""+f.alts()!.map(alt=>buildTypeName(alt, depth-1)).join("/")
+    }
+    else if(t === BDType.FuncRef){
+      return "(" + f.func()!.args.map(arg=>arg.name).join(", ") + ") -> " + buildTypeName(f.func()!.ret, depth-1);
+    }
+    else if(t === BDType.List){
+      const e = f.elem()!.flattenUnion();
+      if(e.getT() == BDType.Union){
+        return "["+e.alts()!.map(alt=>buildTypeName(alt, depth-1)).join("/")+"]"
+      }
+      else{
+        return "["+buildTypeName(e, depth-1)+"]"
+      }
+    }
+    else if(t === BDType.Object){
+      return "{"+Array.from(f.props()!.entries(), ([key,val])=>key+":"+buildTypeName(val,depth-1)).join(", ")+"}"
+    }
+  }
+  return BDTypeNames[t];
+}
+
 class ProvBD_Hover implements vscode.HoverProvider {
   ctx:DocumentContext;
   constructor(ctx:DocumentContext){
@@ -149,7 +176,8 @@ class ProvBD_Hover implements vscode.HoverProvider {
     if(token_info === undefined) return undefined;
     let content:string[] = [];
     const t = token_info.getT();
-    if(t == BDType.Object){
+    return new vscode.Hover(buildTypeName(token_info,3));
+    /*if(t == BDType.Object){
       content.push("### Object\n"+fmtObjectDetails(token_info));
     }
     else if(t == BDType.FuncRef){
@@ -164,7 +192,7 @@ class ProvBD_Hover implements vscode.HoverProvider {
     else {
       content.push(`### ${BDTypeNames[t]}`);
     }
-    return new vscode.Hover(new vscode.MarkdownString(content.join("\n")))
+    return new vscode.Hover(new vscode.MarkdownString(content.join("\n")))*/
   }
 };
 

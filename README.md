@@ -18,8 +18,6 @@ The game can be found here: https://store.steampowered.com/app/4562430/Blackdoor
 - Launch a new vscode instance with the `Launch Extension` vscode debug config
 
 ## Todo
-- fix for-statment type deduction
-- add if/elif/else ordering validation
 - add detection for function/variable shadowing builtin/api
 - add detection for leaked flow statement variable use
 - add detection for redeclaration within scope

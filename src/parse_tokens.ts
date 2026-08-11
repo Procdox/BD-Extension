@@ -8,6 +8,7 @@ const LINT_OPER = /((?:if|elif|else|return|for|while|break|continue|import|func|
 const LINT_NAME = /([a-zA-Z_][a-zA-Z0-9_]*)/gy
 const LINT_STRING = /('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")/gy
 const LINT_NUMBER = /([0-9]+(?:\.[0-9]+)?)/gy
+const LINT_BAD = /\S+/gy
 
 export class Token {
   readonly group:TokenType;
@@ -93,6 +94,9 @@ export function parseTokens(text:string) : Tokenized {
       tokens.push(new Token(r.pos, r.size, TokenType.Name, r.value));
     }
     else {
+      if( (r = tryLint(LINT_BAD)) ){
+        tokens.push(new Token(r.pos, r.size, TokenType.Name, r.value));
+      }
       break;
     }
   }
