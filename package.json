@@ -1,0 +1,47 @@
+{
+  "name": "bdscript-language-extension",
+  "displayName": "Blackdoor Script (.bd)",
+  "description": "Syntax highlighting and lanugage server for Blackdoor's .bd scripting language",
+  "author": {
+    "name": "pb_ozai"
+  },
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.125.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "bdscript",
+        "aliases": [
+          "BDScript",
+          "Blackdoor Script"
+        ],
+        "extensions": [
+          "bd"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "bdscript",
+        "scopeName": "source.bd",
+        "path": "./syntaxes/bd.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+		"compile": "tsc -p ./"
+	},
+	"devDependencies": {
+		"@types/node": "^22",
+		"@types/vscode": "^1.100.0",
+		"typescript": "^5.9.2"
+	}
+}

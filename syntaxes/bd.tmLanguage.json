@@ -1,0 +1,217 @@
+{
+    
+    "name": "BDScript",
+    "scopeName": "source.bd",
+    "patterns": [
+        { "include": "#param-decorator" },
+        { "include": "#strings" },
+        { "include": "#comments" }, 
+        { "include": "#numbers" },
+        { "include": "#keywords" },
+        { "include": "#operators" },
+        { "include": "#storage" },
+        { "include": "#literals" },
+
+        { "include": "#constants" },
+        { "include": "#support-builtins" },
+        { "include": "#support-api" },
+        { "include": "#function-def" },
+        { "include": "#function-call" },
+        { "include": "#function-param" },
+        { "include": "#variable" }
+    ],
+    "repository": {
+        "param-decorator": {
+            "patterns": [{
+                "match": "^\\s*(#)\\s*(@param)\\s*([a-zA-Z_][a-zA-Z0-9_]*)\\s*(\"[^\"]*\")(?:\\s*(optional)|\\s*(default=)([^\\s]*))?",
+                "captures": {
+                  "1":{ "name": "comment.line.number-sign.bd" },
+                  "2":{ "name": "keyword.control.param_declare.bd" },
+                  "3":{ "name": "meta.definition.variable.param_name.bd" },
+                  "4":{ "name": "string.quoted.double.param_description.bd" },
+                  "5":{ "name": "storage.modifier.param_optional_declare.bd" },
+                  "6":{ "name": "storage.modifier.param_default_declare.bd" },
+                  "7":{ "name": "string.unquoted.param_default.bd" }
+                }
+            }]
+        },
+        "comments": {
+            "patterns": [{
+                "name": "comment.line.number-sign.bd",
+                "match": "#.*$"
+            }]
+        },
+        "strings": {
+            "patterns": [{
+                "name": "string.quoted.double.bd",
+                "begin": "\"",
+                "end": "\"",
+                "patterns": [{
+                    "name": "constant.character.escape.bd",
+                    "match": "\\\\."
+                }]
+            }, {
+                "name": "string.quoted.single.bd",
+                "begin": "'",
+                "end": "'",
+                "patterns": [{
+                    "name": "constant.character.escape.bd",
+                    "match": "\\\\."
+                }]
+            }]
+        },
+        "numbers": {
+            "patterns": [{
+                "name": "constant.numeric.bd",
+                "match": "\\b[0-9]+(\\.[0-9]+)?\\b"
+            }]
+        },
+        "literals":{
+          "patterns": [{
+            "name": "meta.array.literal.bd",
+            "begin":"\\[",
+            "end": "\\]",
+            "patterns": [
+              { "include": "#strings" },
+              { "include": "#numbers" },
+              { "include": "#operators" },
+              { "include": "#constants" },
+              { "include": "#support-builtins" },
+              { "include": "#support-api"},
+              { "include": "#function-call" },
+              { "include": "#variable" },
+              { "include": "#literals" }
+            ]
+          }, {
+            "name": "meta.object.literal.bd",
+            "begin":"{",
+            "end": "}",
+            "patterns": [
+              { "include": "#strings" },
+              { "include": "#numbers" },
+              { "include": "#operators" },
+              { "include": "#constants" },
+              { "include": "#support-builtins" },
+              { "include": "#support-api"},
+              { "include": "#function-call" },
+              { "include": "#variable" },
+              { "include": "#literals" }
+            ]
+          }]
+        },
+        "keywords": {
+            "patterns": [{
+                "name": "keyword.control.conditional.bd",
+                "match": "\\b(if|elif|else)\\b"
+            }, {
+                "name": "keyword.control.flow.bd",
+                "match": "\\b(return)\\b"
+            }, {
+                "name": "keyword.control.loop.bd",
+                "match": "\\b(for|while|break|continue)\\b"
+            }, {
+                "name": "keyword.control.import.bd",
+                "match": "\\bimport\\b"
+            }, {
+                "name": "keyword.control.as.bd",
+                "match": "\\bas\\b"
+            }]
+        },
+        "operators": { 
+            "patterns": [{
+                "name": "keyword.operator.expression.in.bd",
+                "match": "\\bin\\b"
+            }, {
+                "name": "keyword.operator.expression.bd",
+                "match": "\\b(or|and|not)\\b"
+            }, {
+                "name": "keyword.operator.relational.bd",
+                "match": "\\b(<=|>=|<|>)\\b"
+            }, {
+                "name": "keyword.operator.comparison.bd",
+                "match": "\\b(==|!=)\\b"
+            }, {
+                "name": "keyword.operator.arithmetic.bd",
+                "match": "\\b(\\+|-|\\*|/|%)\\b"
+            }, {
+                "name": "keyword.operator.assignment.compound.bd",
+                "match": "\\b\\+=\\b"
+            }, {
+                "name": "keyword.operator.assignment.bd",
+                "match": "\\b=\\b"
+            }, {
+                "name": "keyword.operator.ternary.bd",
+                "match": "\\b\\?\\b"
+            }]
+        },
+        "storage": {
+          "patterns": [{
+                "name": "storage.type.function.bd",
+                "match": "\\bfunc\\b"
+            }, {
+                "name": "storage.type.bd",
+                "match": "\\bvar\\b"
+            }]
+        },
+        "constants": {
+            "patterns": [{
+                "name": "constant.language.boolean.false.bd",
+                "match": "\\bfalse\\b"
+            }, {
+                "name": "constant.language.boolean.true.bd",
+                "match": "\\btrue\\b"
+            }, {
+                "name": "constant.language.null.bd",
+                "match": "\\bnull\\b"
+            }]
+        },
+        "support-builtins": {
+            "patterns": [{
+                "name": "support.function.builtin.bd",
+                "match": "\\b(log|range|len|str|int|type|get_param|parse_target)\\b"
+            }]
+        },
+        "support-api": {
+            "patterns": [{
+                "name": "support.function.api.network.bd",
+                "match": "\\b(scan|connect|disconnect)\\b"
+            }, {
+                "name": "support.function.api.security.bd",
+                "match": "\\b(get_security|probe_vuln|exploit_vuln|probe_firewall|bypass_firewall)\\b"
+            },{
+                "name": "support.function.api.auth.bd",
+                "match": "\\b(crack|brute_web|local_crack|su|get_users)\\b"
+            },{
+                "name": "support.function.api.files.bd",
+                "match": "\\b(list_files|read_file|write_file|download|delete_file|file_size|upload|wget)\\b"
+            },{
+                "name": "support.function.api.system.bd",
+                "match": "\\b(get_trace_time|get_noise|get_my_ip|whoami|get_hostname|sleep|get_time|get_detection)\\b"
+            },{
+                "name": "support.function.api.local.bd",
+                "match": "\\b(my_files|read_local|save|local_mkdir|local_cp|local_mv|local_rm)\\b"
+            },{
+                "name": "support.function.api.shop.bd",
+                "match": "\\b(bounce|file_type|scrub_log|is_honeypot|fast_bypass|detect_encryption|decrypt)\\b"
+            }]
+        },
+        "function-def": {
+            "name": "entity.name.function.bd",
+            "match": "(?<=func\\s*)[a-zA-Z_][a-zA-Z0-9_]*"
+        },
+        "function-param":{
+          "name": "variable.parameter.bd",
+          "match": "(?<=func.*\\(.*)\\b[a-zA-Z_][a-zA-Z0-9_]*\\b"
+        },
+        "function-call": {
+            "patterns": [{
+                "name": "entity.name.function.call.bd",
+                "match": "\\b([a-zA-Z_][a-zA-Z0-9_]*)(?=\\s*\\()"
+            }]
+        },
+        "variable": {
+          "name": "variable.bd",
+          "match":"\\b([a-zA-Z_][a-zA-Z0-9_]*)\\b"
+        }
+    }
+}
