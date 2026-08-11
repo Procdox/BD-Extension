@@ -1,22 +1,22 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
 import { ArgInfo, BDType, BDTypeNames, FuncInfo, ObjInfo, TokenType } from './lang_types';
-import { Tokenizer } from './tokenizer';
+import { Parser } from './parser';
 
 const SELECTOR:vscode.DocumentSelector = { language: "bdscript", scheme: 'file' };
 
 class DocumentContext {
   focus:Maybe<vscode.Uri> = undefined;
   issues = vscode.languages.createDiagnosticCollection('bd_issues');
-  parsers:Map<string, Tokenizer>;
+  parsers:Map<string, Parser>;
   constructor(){
-    this.parsers = new Map<string, Tokenizer>;
+    this.parsers = new Map<string, Parser>;
   }
-  create(doc:vscode.TextDocument) : Maybe<Tokenizer> {
+  create(doc:vscode.TextDocument) : Maybe<Parser> {
     const uri_str = doc.uri.toString();
     try {
       dm(`Starting Create: ${uri_str}`);
-      const parser = new Tokenizer(doc);
+      const parser = new Parser(doc);
       dm(`Finished Create: ${uri_str}`);
       this.parsers.set(uri_str, parser);
       return parser;
@@ -35,14 +35,14 @@ class DocumentContext {
       return undefined;
     }
   }
-  get(doc:vscode.TextDocument) : Maybe<Tokenizer> {
+  get(doc:vscode.TextDocument) : Maybe<Parser> {
     return this.parsers.get(doc.uri.toString());
   }
   setActive(doc:vscode.TextDocument){
     if(vscode.languages.match(SELECTOR, doc) <= 0) return;
     dm(`setActive: ${doc.uri.toString()} ${doc.uri.scheme}`);
 
-    let parser:Maybe<Tokenizer> = this.get(doc);
+    let parser:Maybe<Parser> = this.get(doc);
     let stale:boolean = (this.focus != doc.uri);
     this.focus = doc.uri;
     if(parser === undefined || parser.version != doc.version){
@@ -54,13 +54,13 @@ class DocumentContext {
     if(stale){
       dm("... posting issues");
       this.issues.clear();
-      this.issues.set(doc.uri, parser.buildIssues());
+      this.issues.set(doc.uri, parser.rebuildIssues());
     }
   }
   changed(change_event:vscode.TextDocumentChangeEvent){
     const doc = change_event.document;
     if(vscode.languages.match(SELECTOR, doc) <= 0) return;
-    let parser:Maybe<Tokenizer> = this.get(doc);
+    let parser:Maybe<Parser> = this.get(doc);
     if(parser === undefined){
       parser = this.create(doc);
       if(parser === undefined) return;
@@ -87,7 +87,7 @@ class DocumentContext {
     if(this.focus == doc.uri){
       dm("... posting issues");
       this.issues.clear();
-      this.issues.set(doc.uri, parser.buildIssues());
+      this.issues.set(doc.uri, parser.rebuildIssues());
     }
   }
 };
@@ -123,7 +123,7 @@ class ProvBD_Hover implements vscode.HoverProvider {
   provideHover(doc:vscode.TextDocument, pos:vscode.Position, cancel:vscode.CancellationToken) : vscode.ProviderResult<vscode.Hover>{
     const tokenizer = this.ctx.get(doc);
     if(tokenizer === undefined) return undefined;
-    const token = tokenizer.lines[pos.line].at(pos.character);
+    const token = tokenizer.getToken(pos.line,pos.character);
     if(token === undefined || token.group != TokenType.Name) return undefined;
     const token_infos = token.getInfo();
     let content:string[] = []

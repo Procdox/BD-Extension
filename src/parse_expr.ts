@@ -3,10 +3,6 @@ import { dm, Maybe } from './helpers';
 import { AnyInfo, BDType, BDTypeNames, ErrNode, ExprNode, NULL_NODE, NULL_TOKEN, ObjInfo, ParseToken, PropInfos, TokenType } from "./lang_types";
 import { BUILTINS, DICT_PROPS, LIST_PROPS, STRING_PROPS } from './builtins';
 
-
-
-
-
 export class ExprReader {
   tokens:ParseToken[];
   pos:number;
