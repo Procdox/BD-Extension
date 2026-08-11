@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
 import { Token } from "./parse_tokens"
-import { AnyInfo, BDType, BDTypeNames, FuncInfo, ListInfo, ObjInfo, PropInfos, TokenType } from "./enums";
+import { AnyInfo, ArgInfo, BDType, BDTypeNames, FuncInfo, ListInfo, ObjInfo, PropInfos, TokenType, TypeData, TypeInst, UnionInfo, VarInfo } from "./enums";
 import { BUILTINS, DICT_PROPS, LIST_PROPS, STRING_PROPS } from './builtins';
 
 export class TokenReader {
@@ -185,97 +185,127 @@ export class ExprReader extends TokenReader {
       if(decl === undefined) {
         const bi_info = BUILTINS.get(ref_name);
         if(bi_info !== undefined){
-          cur_ref.type_data.setInfo(bi_info);
+          cur_ref.type_data.setSrc(bi_info);
         }
         else {
-          cur_ref.type_data.setInfo(BDType.Unknown);
+          cur_ref.type_data.setSrc({t:BDType.Unknown});
           issues.push({l:actual_line, t:cur_ref.token, m:"Reference to undeclared variable"});
         }
       }
       else {
-        cur_ref.type_data.setInfo(decl.type_data.info);
+        cur_ref.type_data.copySrc(decl.type_data.used);
       }
     }
   }
-  /*evalRvalTarget(expr_info:AnyInfo){
+  evalRvalTarget(expr_info:TypeInst|AnyInfo){
     let focus:ExprNode = this.ast;
     let prop_name:Maybe<string> = undefined;
-    let src_token:Maybe<Token> = undefined;
+    let src_node:Maybe<ExprNode> = undefined;
     if(focus instanceof PropertyNode){
       if(focus.property instanceof ErrNode) return;
       prop_name = focus.property.content();
-      src_token = focus.src.token;
+      src_node = focus.src;
     }
     else if(focus instanceof IndexNode){
       if(focus.index instanceof RawNode){
         prop_name = focus.index.token.content();
-        src_token = focus.src.token;
+        src_node = focus.src;
       }
     }
     else if(focus instanceof NameNode){
-      src_token = focus.token;
+      src_node = focus;
     }
-    if(src_token === undefined) return;
+    if(src_node === undefined) return;
 
     if(prop_name !== undefined) {
-      src_token.addProp(prop_name, expr_info);
+      src_node.type_data.used.addProp(prop_name, expr_info);
+      src_node.type_data.modifies = true
     }
     else {
-      src_token.addInfo(expr_info);
+      src_node.type_data.used.union(expr_info);
+      src_node.type_data.modifies = true
     }
-  }*/
-  eval() : AnyInfo {
+  }
+  eval() : TypeInst {
     this.ast.doEval();
-    return this.ast.type_data.info;
+    return this.ast.type_data.used;
   }
   teardown() {
     this.ast.teardown();
   }
 }
 
-class TypeData {
-  token:Token;
-  info:AnyInfo = BDType.Unknown;
-  constructor(token:Token){
-    this.token = token;
+export class NodeTypeData extends TypeData {
+  node:ExprNode;
+  tokens:Token[];
+  modifies:boolean = false;
+  ref:Maybe<NodeTypeData> = undefined;
+  refers:NodeTypeData[] = [];
+  constructor(node:ExprNode, token:Token){
+    super();
+    this.node = node;
+    this.tokens = [token];
   }
-  setInfo(info:AnyInfo){
-    this.info = info
-    this.token.hover_info = info;
+  clearEffects(){
+    if(this.ref !== undefined){
+      this.ref.refers.splice(this.ref.refers.indexOf(this), 1);
+      if(this.modifies){
+        this.ref.node.markDirty();
+      }
+    }
+    this.modifies = false;
+    this.ref = undefined;
   }
-  canBe(t:BDType){
-    return this.info == BDType.Unknown || (typeof this.info === "number" ? this.info : this.info.t) === t;
+  setSrc(info:AnyInfo|TypeInst, force_clone:boolean=false){
+    if(!force_clone && info instanceof TypeInst){
+      const t = info.getT();
+      if(t == BDType.Object || t == BDType.List || t == BDType.Union || t == BDType.FuncRef){
+        return this.copySrc(info);
+      }
+    }
+    
+    this.clearEffects();
+    if(info instanceof TypeInst) {
+      this.ref = info.ctx as NodeTypeData;
+      this.ref.refers.push(this);
+    }
+
+    this.src = info
+    this.used = new TypeInst(this, this.src, force_clone);
+    this.tokens.forEach((t)=>{ 
+      t.hover_info = this.used;
+    });
+    this.refers.forEach((r)=>r.node.markDirty());
   }
-  is(t:BDType){
-    return (typeof this.info === "number" ? this.info : this.info.t) === t;
+  copySrc(info:TypeInst){
+    if(info === this.used) return;
+
+    this.clearEffects();
+    this.ref = info.ctx as NodeTypeData;
+    this.ref.refers.push(this);
+    
+    this.src = info
+    this.used = info;
+    this.tokens.forEach((t)=>{ 
+      t.hover_info = this.used;
+    });
+    this.refers.forEach((r)=>r.node.markDirty());
   }
-  asFunc() : Maybe<FuncInfo> {
-    if(typeof this.info === "number" || this.info.t !== BDType.FuncRef) return undefined;
-    return this.info;
-  }
-  asList() : Maybe<ListInfo> {
-    if(typeof this.info === "number" || this.info.t !== BDType.List) return undefined;
-    return this.info;
-  }
-  asObject() : Maybe<ObjInfo> {
-    if(typeof this.info === "number" || this.info.t !== BDType.Object) return undefined;
-    return this.info;
-  }
-};
+}
 
 export abstract class ExprNode {
   readonly token:Token;
   parent:Maybe<ExprNode> = undefined;
   children:ExprNode[] = [];
   eval_dirty:boolean = true;
-  type_data:TypeData;
+  type_data:NodeTypeData;
   addChild(child:ExprNode){
     child.parent = this;
     this.children.push(child);
   }
   constructor(token:Token){ 
     this.token = token; 
-    this.type_data = new TypeData(this.token);
+    this.type_data = new NodeTypeData(this, this.token);
   }
   dbg(depth:number){
     const pad = "  ".repeat(depth);
@@ -300,6 +330,7 @@ export abstract class ExprNode {
     }
   }
   teardown(){
+    this.type_data.clearEffects();
     this.children.forEach(c=>c.teardown());
   }
   abstract eval() : void;
@@ -335,16 +366,16 @@ class RawNode extends ExprNode {
     super(token);
     token.errorIfNot([TokenType.True, TokenType.False, TokenType.Null, TokenType.Number, TokenType.String, TokenType.Name]);
     if(this.token.group == TokenType.True || this.token.group == TokenType.False){
-      this.type_data.setInfo(BDType.Bool);
+      this.type_data.setSrc({t:BDType.Bool});
     }
     else if(this.token.group == TokenType.Null){
-      this.type_data.setInfo(BDType.Null);
+      this.type_data.setSrc({t:BDType.Null});
     }
     else if(this.token.group == TokenType.Number){
-      this.type_data.setInfo(BDType.Number);
+      this.type_data.setSrc({t:BDType.Number});
     }
     else if(this.token.group == TokenType.String){
-      this.type_data.setInfo(BDType.String);
+      this.type_data.setSrc({t:BDType.String});
     }
   }
   eval() {}
@@ -358,7 +389,29 @@ class ListNode extends ExprNode {
     this.elements.forEach(elem=>this.addChild(elem));
   }
   eval() {
-    this.type_data.setInfo({t:BDType.List, elem:BDType.Unknown});
+    let type_options:TypeInst[] = [];
+    for(let idx = 0; idx < this.elements.length; idx++){
+      const elem = this.elements[idx];
+      if(elem.type_data.is(BDType.Unknown)){
+        type_options = [];
+        break;
+      }
+      if(!type_options.some(old=>old.cmp(elem.type_data.used))){
+        type_options.push(elem.type_data.used);
+      }
+    }
+    let elem_type:AnyInfo|TypeInst;
+    if(type_options.length == 0){
+      elem_type = {t:BDType.Unknown};
+    }
+    else if(type_options.length == 1){
+      elem_type = type_options[0];
+    }
+    else {
+      elem_type = {t:BDType.Union, alts:type_options};
+    }
+    
+    this.type_data.setSrc({t:BDType.List, elem:elem_type});
   }
 };
 class DictNode extends ExprNode {
@@ -380,9 +433,9 @@ class DictNode extends ExprNode {
   eval() {
     const props:PropInfos = new Map<string,AnyInfo>();
     this.elements.forEach((prop)=>{
-      props.set(prop.key.token.content(), prop.value.type_data.info);
+      props.set(prop.key.token.content(), prop.value.type_data.used);
     });
-    this.type_data.setInfo({t:BDType.Object, props:props});
+    this.type_data.setSrc({t:BDType.Object, props:props});
   }
 };
 
@@ -398,15 +451,19 @@ class CallNode extends ExprNode {
     this.args.forEach(arg=>this.addChild(arg));
   }
   eval() {
-    this.type_data.setInfo(BDType.Unknown);
+    this.type_data.setSrc({t:BDType.Unknown});
     if(this.src instanceof NameNode){
-      const func_info = this.src.type_data.asFunc();
+      if(this.src.type_data.is(BDType.Unknown)){
+        this.type_data.setSrc({t:BDType.Unknown});
+        return;
+      }
+      const func_info = this.src.type_data.used.func();
       if(func_info === undefined) {
-        this.type_data.setInfo(BDType.Unknown);
+        this.type_data.setSrc({t:BDType.Unknown});
         this.token.temp_issues.push(`${this.src.token.content()} is not a function`);
         return;
       }
-      this.type_data.setInfo(func_info.ret);
+      this.type_data.setSrc(func_info.ret, true);
       
       for(let idx = 0; idx < func_info.args.length; idx++){
         const api = func_info.args[idx];
@@ -444,7 +501,7 @@ export class IndexNode extends ExprNode {
     this.addChild(this.index);
   }
   eval() {
-    let best_info:AnyInfo = BDType.Unknown;
+    let best_info:AnyInfo|TypeInst = {t:BDType.Unknown};
     const src_info = this.src.type_data;
     const num_index = this.index.type_data.canBe(BDType.Number);
     const str_index = this.index.type_data.canBe(BDType.String);
@@ -452,13 +509,13 @@ export class IndexNode extends ExprNode {
       if(!num_index){
         this.index.token.temp_issues.push("Indexes must be numbers for lists");
       }
-      best_info = (src_info.info as ListInfo).elem;
+      best_info = src_info.used.elem()!;
     }
     else if(src_info.is(BDType.String)){
       if(!num_index){
         this.index.token.temp_issues.push("Indexes must be numbers for strings");
       }
-      best_info = BDType.String;
+      best_info = {t:BDType.String};
     }
     else if(src_info.is(BDType.Object)){
       if(!str_index){
@@ -466,7 +523,7 @@ export class IndexNode extends ExprNode {
       }
       else if(this.index instanceof RawNode) {
         const prop_name = this.index.token.content();
-        const prop_info = (src_info.info as ObjInfo).props.get(prop_name)
+        const prop_info = src_info.used.props()!.get(prop_name)
         if(prop_info === undefined){
           this.index.token.temp_issues.push(`Object property ${prop_name} wasn't found`);
         }
@@ -479,11 +536,11 @@ export class IndexNode extends ExprNode {
       if(!str_index && !num_index){
         this.index.token.temp_issues.push("Indexes must be either strings for objects, or numbers for lists/strings");
       }
-      if(src_info.info !== BDType.Unknown){
+      if(!src_info.is(BDType.Unknown)){
         this.index.token.temp_issues.push("Indexes are only valid for lists, objects, and strings");
       }
     }
-    this.type_data.setInfo(best_info);
+    this.type_data.setSrc(best_info);
   }
 }; 
 export class PropertyNode extends ExprNode {
@@ -495,7 +552,7 @@ export class PropertyNode extends ExprNode {
     this.src = left;
     this.property = reader.expectNext(TokenType.Name, "Expected a property name") ?? NULL_TOKEN;
     this.addChild(left);
-    this.type_data.token = this.property;
+    this.type_data.tokens.push(this.property);
   }
   dbg(depth:number){
     const pad = "  ".repeat(depth+1);
@@ -504,7 +561,7 @@ export class PropertyNode extends ExprNode {
   eval() {
     this.property.temp_issues = [];
     if(this.src.type_data.canBe(BDType.Unknown)) {
-      this.type_data.setInfo(BDType.Unknown);
+      this.type_data.setSrc({t:BDType.Unknown});
       return;
     }
     
@@ -513,34 +570,36 @@ export class PropertyNode extends ExprNode {
     const maybe_string = this.src.type_data.canBe(BDType.String);
     if(!maybe_dict && !maybe_list && !maybe_string) {
       this.property.temp_issues.push("Properties can only be taken from lists, objects, and strings");
-      this.type_data.setInfo(BDType.Unknown);
+      this.type_data.setSrc({t:BDType.Unknown});
       return;
     }
 
     const prop_name = this.property.content();
     
     if(maybe_list){
-      if(prop_name == "pop" && this.src.type_data.is(BDType.List)){
-        this.type_data.setInfo((this.src.type_data.info as ListInfo).elem);
-        return;
-      }
       const bi_info = LIST_PROPS.get(prop_name);
       if(bi_info !== undefined){
-        this.type_data.setInfo(bi_info);
+        if(prop_name == "pop" && this.src.type_data.is(BDType.List)){
+          const elem = this.src.type_data.used.elem()!;
+          this.type_data.setSrc({...bi_info, ret:elem})
+        }
+        else {
+          this.type_data.setSrc(bi_info);
+        }
         return;
       }
     }
     if(maybe_dict){
       const bi_info = DICT_PROPS.get(prop_name);
       if(bi_info !== undefined){
-        this.type_data.setInfo(bi_info);
+        this.type_data.setSrc(bi_info);
         return;
       }
     }
     if(maybe_string){
       const bi_info = STRING_PROPS.get(prop_name);
       if(bi_info !== undefined){
-        this.type_data.setInfo(bi_info);
+        this.type_data.setSrc(bi_info);
         return;
       }
     }
@@ -548,14 +607,14 @@ export class PropertyNode extends ExprNode {
 
     const src_info = this.src.type_data;
     if(src_info.is(BDType.Object)){
-      const user_info = (src_info.info as ObjInfo).props.get(prop_name);
+      const user_info = src_info.used.props()!.get(prop_name);
       if(user_info !== undefined){
-        this.type_data.setInfo(user_info);
+        this.type_data.setSrc(user_info);
         return;
       }
     }
     this.property.temp_issues.push(`Property ${prop_name} wasn't found`);
-    this.type_data.setInfo(BDType.Unknown);
+    this.type_data.setSrc({t:BDType.Unknown});
   }
 }; 
 
@@ -575,13 +634,13 @@ class UnaryNode extends ExprNode {
       if(!this.right.type_data.canBe(BDType.Number)){
         this.right.token.temp_issues.push("Expected Boolean");
       }
-      this.type_data.setInfo(BDType.Bool);
+      this.type_data.setSrc({t:BDType.Bool});
     }
     else {
       if(!this.right.type_data.canBe(BDType.Number)){
         this.right.token.temp_issues.push("Expected Number");
       }
-      this.type_data.setInfo(BDType.Number);
+      this.type_data.setSrc({t:BDType.Number});
     }
   }
 };
@@ -604,7 +663,7 @@ class BinaryNode extends ExprNode {
   eval() {
     if(this.token.group == TokenType.Add){
       if(this.left.type_data.canBe(BDType.String) || this.left.type_data.canBe(BDType.String)){
-        this.type_data.setInfo(BDType.String);
+        this.type_data.setSrc({t:BDType.String});
         return;
       }
     }
@@ -615,10 +674,10 @@ class BinaryNode extends ExprNode {
       if(!this.right.type_data.canBe(BDType.Number)){
         this.right.token.temp_issues.push("Expected Number");
       }
-      this.type_data.setInfo(BDType.Number);
+      this.type_data.setSrc({t:BDType.Number});
     }
     else{
-      this.type_data.setInfo(BDType.Bool);
+      this.type_data.setSrc({t:BDType.Bool});
     }
   }
 };
@@ -638,14 +697,14 @@ class TernaryNode extends ExprNode {
     this.addChild(this.false_clause);
   }
   eval() {
-    if(this.condition.type_data.canBe(BDType.Bool)){
+    if(!this.condition.type_data.canBe(BDType.Bool)){
       this.condition.token.temp_issues.push("Expected Boolean");
     }
-    if(this.true_clause.type_data.info == this.false_clause.type_data.info){
-      this.type_data.setInfo(this.true_clause.type_data.info);
+    if(this.true_clause.type_data.used == this.false_clause.type_data.used){
+      this.type_data.setSrc(this.true_clause.type_data.used);
     }
     else {
-      this.type_data.setInfo(BDType.Unknown);
+      this.type_data.setSrc({t:BDType.Unknown});
     }
   }
 }; 

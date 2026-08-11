@@ -41,34 +41,275 @@ export enum BDType {
   List,
   FuncRef,
   Null,
-  Unknown,
+  Union, // Type Deduction Helper 
+  Unknown, // Type Deduction Helper
 };
-export const BDTypeNames:string[] = ["Number", "Boolean", "String", "Object", "List", "FuncRef", "Null", "Unknown"]
+export const BDTypeNames:string[] = ["Number", "Boolean", "String", "Object", "List", "FuncRef", "Null", "Union", "Unknown"]
 
-export type VarInfo = BDType.Number|BDType.Bool|BDType.String|BDType.Null|BDType.Unknown;
 export interface ArgInfo {
   name:string,
   wants:BDType|BDType[],
   description?:string,
-  opt?:boolean
+  opt?:boolean;
+};
+export type VarInfo = {
+  t:BDType.Number|BDType.Bool|BDType.String|BDType.Null|BDType.Unknown;
 };
 export interface FuncInfo {
   t:BDType.FuncRef,
   name:string;
   description:string;
   args:ArgInfo[];
-  ret:AnyInfo;
+  ret:AnyInfo|TypeInst;
 };
 export interface ListInfo {
   t:BDType.List,
-  elem:AnyInfo
+  elem:AnyInfo|TypeInst;
 }
-export type PropInfos = Map<string,AnyInfo>;
+export type PropInfos = Map<string,AnyInfo|TypeInst>;
 export interface ObjInfo {
   t:BDType.Object;
   props:PropInfos;
-  bi?:ObjInfo;
 };
-export type AnyInfo = VarInfo|ListInfo|FuncInfo|ObjInfo;
+export interface UnionInfo {
+  t:BDType.Union;
+  alts:(AnyInfo|TypeInst)[];
+};
+export type AnyInfo = VarInfo|ListInfo|FuncInfo|ObjInfo|UnionInfo;
 
+interface FuncInstDat {
+  name:string;
+  description:string;
+  args:ArgInfo[];
+  ret:TypeInst
+}
+export class TypeInst {
+  readonly ctx:TypeData;
+  private t:BDType;
+  private data:Map<string,TypeInst>|TypeInst|FuncInstDat|TypeInst[]|undefined;
+  constructor(ctx:TypeData, src:AnyInfo|TypeInst, force_clone:boolean){
+    this.ctx = ctx;
+    if(src instanceof TypeInst){
+      this.t = src.t;
+      if(src.t == BDType.Object){
+        if(force_clone){
+          const props = new Map<string,TypeInst>();
+          (src.data as Map<string,TypeInst>).forEach((val,key)=>{
+            props.set(key, new TypeInst(ctx, val, force_clone));
+          });
+          this.data = props;
+        }
+        else{
+          this.data = new Map<string,TypeInst>((src.data as Map<string,TypeInst>));
+        }
+      }
+      else if(src.t == BDType.List){
+        this.data = force_clone ? new TypeInst(ctx, (src.data as TypeInst), force_clone) : (src.data as TypeInst);
+      }
+      else if(src.t == BDType.FuncRef){
+        const src_fn = (src.data as FuncInstDat)
+        const my_fn:FuncInstDat = {...src_fn};
+        if(force_clone){
+          my_fn.ret = new TypeInst(ctx, src_fn.ret, force_clone);
+        }
+        this.data = my_fn;
+      }
+      else if(src.t == BDType.Union){
+        if(force_clone){
+          this.data = (src.data as TypeInst[]).map((alt)=>{
+            return new TypeInst(ctx, alt, force_clone);
+          });
+        }
+        else {
+          this.data = (src.data as TypeInst[]).map((alt)=>alt);
+        }
+      }
+    }
+    else {
+      const src_info = src; // why is this needed
+      this.t = src.t;
+      if(src_info.t == BDType.Object){
+        const props = new Map<string,TypeInst>();
+        src_info.props.forEach((val,key)=>{
+          props.set(key, (force_clone || !(val instanceof TypeInst)) ? new TypeInst(ctx, val, force_clone) : val);
+        });
+        this.data = props;
+      }
+      else if(src_info.t == BDType.List){
+        this.data = (force_clone || !(src_info.elem instanceof TypeInst)) ? new TypeInst(ctx, src_info.elem, force_clone) : src_info.elem;
+      }
+      else if(src_info.t == BDType.FuncRef){
+        const ret_val = (force_clone || !(src_info.ret instanceof TypeInst)) ? new TypeInst(ctx, src_info.ret, force_clone) : src_info.ret;
+        const my_fn:FuncInstDat = {...src_info, ret:ret_val}
+        this.data = my_fn;
+      }
+      else if(src_info.t == BDType.Union){
+        this.data = src_info.alts.map((alt)=>{
+          return (force_clone || !(alt instanceof TypeInst)) ? new TypeInst(ctx, alt, force_clone) : alt;
+        });
+      }
+    }
+  }
+  getT() { return this.t; }
+  props() {
+    return this.t === BDType.Object ? (this.data as Map<string,TypeInst>) : undefined;
+  }
+  elem() {
+    return this.t === BDType.List ? (this.data as TypeInst) : undefined;
+  }
+  func() {
+    return this.t === BDType.FuncRef ? (this.data as FuncInstDat) : undefined;
+  }
+  alts() {
+    return this.t === BDType.Union ? (this.data as TypeInst[]) : undefined;
+  }
 
+  canBe(test:BDType) : boolean {
+    if(this.t == test || this.t == BDType.Unknown) return true;
+    if(this.t == BDType.Union){
+      return (this.data as TypeInst[]).some((alt)=>alt.canBe(test));
+    }
+    return false;
+  }
+  private cmpInst(other:TypeInst) : boolean {
+    if(this === other) return true;
+    else if(this.t !== other.t) return false;
+    else if(this.t == BDType.Object){
+      const t_props = (this.data as Map<string,TypeInst>);
+      const o_props = (other.data as Map<string,TypeInst>);
+      if(t_props.size != o_props.size) return false;
+      for(let [key, t_val] of t_props){
+        const o_val = t_props.get(key);
+        if(o_val === undefined || !t_val.cmpInst(o_val)) return false;
+      }
+      return true;
+    }
+    else if(this.t == BDType.List){
+      return (this.data as TypeInst).cmpInst((other.data as TypeInst));
+    }
+    else if(this.t == BDType.FuncRef){
+      return (this.data as FuncInstDat).ret.cmpInst((other.data as FuncInstDat).ret);
+    }
+    else if(this.t == BDType.Union){
+      const t_alts = (this.data as TypeInst[]);
+      const o_alts = (other.data as TypeInst[]);
+      for(let t_alt of t_alts){
+        if(!o_alts.some((o_alt)=>t_alt.cmpInst(o_alt))) return false;
+      }
+      return true;
+    }
+    return true;
+  }
+  private cmpInfo(other:AnyInfo) : boolean {
+    if(this.t !== other.t) return false;
+    else if(this.t == BDType.Object){
+      const t_props = (this.data as Map<string,TypeInst>);
+      const o_props = (other as ObjInfo).props;
+      if(t_props.size != o_props.size) return false;
+      for(let [key, t_val] of t_props){
+        const o_val = t_props.get(key);
+        if(o_val === undefined || !t_val.cmp(o_val)) return false;
+      }
+      return true;
+    }
+    else if(this.t == BDType.List){
+      return (this.data as TypeInst).cmp((other as ListInfo).elem);
+    }
+    else if(this.t == BDType.FuncRef){
+      return (this.data as FuncInstDat).ret.cmp((other as FuncInfo).ret);
+    }
+    else if(this.t == BDType.Union){
+      const t_alts = (this.data as TypeInst[]);
+      const o_alts = (other as UnionInfo).alts;
+      for(let t_alt of t_alts){
+        if(!o_alts.some((o_alt)=>t_alt.cmp(o_alt))) return false;
+      }
+      return true;
+    }
+    return true;
+  }
+  cmp(other:AnyInfo|TypeInst){
+    if(other instanceof TypeInst) return this.cmpInst(other);
+    else return this.cmpInfo(other);
+  }
+  private unionInst(other:TypeInst){
+    if(this.t === BDType.Unknown) {
+      return;
+    }
+    if(other.t === BDType.Unknown){
+      this.t = BDType.Unknown;
+      this.data = undefined;
+      return;
+    }
+    if(this.cmpInst(other)) return;
+    if(this.t !== BDType.Union){
+      const clone = new TypeInst(this.ctx, {t:BDType.Unknown}, false);
+      clone.t = this.t;
+      clone.data = this.data;
+      this.t = BDType.Union;
+      this.data = [clone];
+    }
+
+    const t_alts = (this.data as TypeInst[]);
+    if( other.t === BDType.Union) {
+      const o_alts = (other.data as TypeInst[]);
+      o_alts.forEach((o_alt)=>this.unionInst(o_alt));
+    }
+    else if(!t_alts.some((t_alt)=>t_alt.cmpInst(other))){
+      t_alts.push(other);
+    }
+  }
+  private unionInfo(other:AnyInfo){
+    if(this.t === BDType.Unknown) {
+      return;
+    }
+    if(other.t === BDType.Unknown){
+      this.t = BDType.Unknown;
+      this.data = undefined;
+      return;
+    }
+    if(this.cmpInfo(other)) return;
+    if(this.t !== BDType.Union){
+      const clone = new TypeInst(this.ctx, {t:BDType.Unknown}, false);
+      clone.t = this.t;
+      clone.data = this.data;
+      this.t = BDType.Union;
+      this.data = [clone];
+    }
+
+    const t_alts = (this.data as TypeInst[]);
+    if( other.t === BDType.Union) {
+      other.alts.forEach((o_alt)=>this.union(o_alt));
+    }
+    else if(!t_alts.some((t_alt)=>t_alt.cmpInfo(other))){
+      t_alts.push(new TypeInst(this.ctx,other, false));
+    }
+  }
+  union(other:TypeInst|AnyInfo){
+    if(other instanceof TypeInst) this.unionInst(other);
+    else this.unionInfo(other);
+  }
+  addProp(prop_name:string, prop_expr:TypeInst|AnyInfo){
+    const props = this.props();
+    if(props === undefined) return;
+    if(!(prop_expr instanceof TypeInst)){
+      prop_expr = new TypeInst(this.ctx, prop_expr, false);
+    }
+    props.set(prop_name, prop_expr);
+  }
+};
+
+export class TypeData {
+  protected src:AnyInfo|TypeInst; // the original declaration type, used to restore when a modder leaves
+  used:TypeInst;
+  constructor(){
+    this.src = {t:BDType.Unknown};
+    this.used = new TypeInst(this, this.src, false);
+  }
+  canBe(t:BDType){
+    return this.used.canBe(t);
+  }
+  is(t:BDType){
+    return this.used.getT() === t;
+  }
+};

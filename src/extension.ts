@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
-import { ArgInfo, BDType, BDTypeNames, FuncInfo, ListInfo, ObjInfo, TokenType } from './enums';
+import { ArgInfo, BDType, BDTypeNames, FuncInfo, ListInfo, ObjInfo, TokenType, TypeInst, UnionInfo } from './enums';
 import { Parser } from './parser';
 
 const SELECTOR:vscode.DocumentSelector = { language: "bdscript", scheme: 'file' };
@@ -92,37 +92,45 @@ class DocumentContext {
   }
 };
 
-function fmtObjectInfo(info:ObjInfo){
-  var content:string[] = [];
-  info.props.forEach((info,name) => {
-    content.push(`\n- ${name}: ${BDTypeNames[typeof info === "number" ? info : info.t]}`);
+function fmtObjectDetails(info:TypeInst){
+  let content:string[] = [];
+  info.props()!.forEach((info,name) => {
+    content.push(`\n- ${name}: ${BDTypeNames[info.getT()]}`);
   });
   return content.join("\n");
 }
-function fmtFuncInfo(info:FuncInfo){
+function fmtFuncInfo(info:TypeInst){
+  const fn = info.func()!;
   function fmtArg(arg:ArgInfo){
     const type_str = (arg.wants instanceof Array) ? arg.wants.map(api_t=>BDTypeNames[api_t]).join("/") : BDTypeNames[arg.wants];
     const body = arg.wants == BDType.Unknown ? arg.name : `${arg.name}:${type_str}`;
     return arg.opt === true ? `[${body}]` : body;
   }
-  var arg_names = info.args.map(fmtArg).join(", ");
-  var content = `### ${info.name}(${arg_names})\n${info.description}`;
-  info.args.forEach(arg => {
+  let arg_names = fn.args.map(fmtArg).join(", ");
+  let content = `### ${fn.name}(${arg_names}) : ${BDTypeNames[fn.ret.getT()]}\n${fn.description}`;
+  fn.args.forEach(arg => {
     if (arg.description !== undefined) {
       content += `\n- ${arg.name}: ${arg.description}`;
     }
   });
   return content;
 }
-function fmtListInfo(info:ListInfo){
-  var content = `### List`;
-  if(info.elem !== BDType.Unknown){
-    content += `[${BDTypeNames[typeof info.elem === "number" ? info.elem : info.elem.t]}]`
+function fmtListInfo(info:TypeInst){
+  const elem = info.elem()!;
+  let content:string = "";
+  if(elem.getT() === BDType.Union){
+    content += `[${fmtUnionInfo(elem)}]`;
   }
-  if(typeof info.elem !== "number" && info.elem.t === BDType.Object){
-    content += "\n" + fmtObjectInfo(info.elem);
+  else if(elem.getT() === BDType.Object){
+    content += "[Object]\n" + fmtObjectDetails(elem);
+  }
+  else if(elem.getT() !== BDType.Unknown){
+    content += `[${BDTypeNames[elem.getT()]}]`;
   }
   return content
+}
+function fmtUnionInfo(info:TypeInst){
+  return "Union["+info.alts()!.map(alt=>BDTypeNames[alt.getT()]).join(", ")+"]"
 }
 
 class ProvBD_Hover implements vscode.HoverProvider {
@@ -134,22 +142,27 @@ class ProvBD_Hover implements vscode.HoverProvider {
     const tokenizer = this.ctx.get(doc);
     if(tokenizer === undefined) return undefined;
     const token = tokenizer.getToken(pos.line,pos.character);
-    if(token === undefined || token.group !== TokenType.Name) return undefined;
-    let content:string[] = []
+    if(token === undefined) return undefined;
+    if(token.group !== TokenType.Name && token.group !== TokenType.Dot) return undefined;
+    
     const token_info = token.hover_info;
-    if(typeof token_info !== "number"){
-      if(token_info.t == BDType.Object){
-        content.push("### Object\n"+fmtObjectInfo(token_info));
-      }
-      else if(token_info.t == BDType.FuncRef){
-        content.push(fmtFuncInfo(token_info));
-      }
-      else{
-        content.push(fmtListInfo(token_info));
-      }
+    if(token_info === undefined) return undefined;
+    let content:string[] = [];
+    const t = token_info.getT();
+    if(t == BDType.Object){
+      content.push("### Object\n"+fmtObjectDetails(token_info));
     }
-    else{
-      content.push(`### ${BDTypeNames[token_info]}`);
+    else if(t == BDType.FuncRef){
+      content.push(fmtFuncInfo(token_info));
+    }
+    else if(t == BDType.List){
+      content.push("### List"+fmtListInfo(token_info));
+    }
+    else if(t == BDType.Union){
+      content.push("### "+fmtUnionInfo(token_info));
+    }
+    else {
+      content.push(`### ${BDTypeNames[t]}`);
     }
     return new vscode.Hover(new vscode.MarkdownString(content.join("\n")))
   }

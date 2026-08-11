@@ -36,6 +36,12 @@ export class Parser {
 
       const raw_lines = raw_text.split(/\r\n|\r|\n/);
       const new_lines = raw_lines.map((line_text)=>parseLine(line_text));
+      for(let idx = start.line;idx<=end.line;idx++){
+        const stmt = this.lines[idx].stmt;
+        if(stmt === undefined) continue;
+        if(stmt.lval_expr) stmt.lval_expr.teardown();
+        if(stmt.rval_expr) stmt.rval_expr.teardown();
+      }
       this.lines.splice(delta.range.start.line, line_count, ...new_lines);
     });
     this.rebuildScopes();
@@ -90,8 +96,12 @@ export class Parser {
     const line_data = this.lines[line];
     for(let idx=0;idx<line_data.tokens.length;idx++){
       const focus = line_data.tokens[idx];
-      if(focus.pos > char) break;
-      if(focus.pos + focus.size >= char) return focus;
+      if(focus.pos > char) {
+        break;
+      }
+      if(focus.pos + focus.size >= char) {
+        return focus;
+      }
     }
     return undefined;
   }

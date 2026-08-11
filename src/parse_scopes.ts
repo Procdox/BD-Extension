@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
-import { AnyInfo, ArgInfo, BDType, TokenNames, TokenType } from "./enums";
+import { AnyInfo, ArgInfo, BDType, TokenNames, TokenType, TypeInst } from "./enums";
 import { ExprReader, IndexNode, NameNode, PropertyNode, } from './parse_expr';
 import { BUILTINS } from './builtins';
 import { Token, Tokenized } from './parse_tokens';
@@ -78,7 +78,7 @@ export class Scope {
       }
 
       const stmt = focus.stmt!;
-      let expr_result:AnyInfo = BDType.Unknown;
+      let expr_result:AnyInfo|TypeInst = {t:BDType.Unknown};
 
       if(stmt.rval_expr){
         stmt.rval_expr.resolveRefs(tracker, focus.linenum, this.issues);
@@ -87,21 +87,28 @@ export class Scope {
       }
       if(stmt.lval_expr){
         stmt.lval_expr.resolveRefs(tracker, focus.linenum, this.issues);
-        //stmt.lval_expr.evalRvalTarget(expr_result[0]);
+        stmt.lval_expr.evalRvalTarget(expr_result);
         stmt.lval_expr.eval();
         //dm(`VarType: ${BDTypeNames[typeof expr_result === "number" ? expr_result : expr_result.t]} ... ${focus.text}`)
       }
-
-      if(stmt.t == TokenType.Func && stmt.outer_declares.length > 0) {
-        const func_name = stmt.outer_declares[0].token.content();
-        const func_args:ArgInfo[] = [];
-        stmt.inner_declares.forEach((arg)=>{
-          func_args.push({name:arg.token.content(), wants:BDType.Unknown});
-        })
-        expr_result = {t:BDType.FuncRef, name:func_name, description:"", args:func_args, ret:BDType.Unknown};
+      if(stmt.t == TokenType.For){
+        if(expr_result instanceof TypeInst && expr_result.getT() == BDType.List){
+          const elem = expr_result.elem()! 
+          stmt.inner_declares.forEach((decl)=>decl.type_data.setSrc(elem));
+        }
+      }
+      else if(stmt.t == TokenType.Func){
+        if(stmt.outer_declares.length > 0) {
+          const func_name = stmt.outer_declares[0].token.content();
+          const func_args:ArgInfo[] = [];
+          stmt.inner_declares.forEach((arg)=>{
+            func_args.push({name:arg.token.content(), wants:BDType.Unknown});
+          })
+          expr_result = {t:BDType.FuncRef, name:func_name, description:"", args:func_args, ret:{t:BDType.Unknown}};
+        }
       }
       stmt.outer_declares.forEach((decl)=>{
-        decl.type_data.setInfo(expr_result);
+        decl.type_data.setSrc(expr_result);
         tracker.set(decl.token.content(), decl);
       });
       

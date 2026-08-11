@@ -24,4 +24,4 @@ The game can be found here: https://store.steampowered.com/app/4562430/Blackdoor
 - add detection for leaked flow statement variable use
 - add detection for redeclaration within scope
 - add dynamic import statement support
-- add list element type deduction
+- add list append/insert type deduction

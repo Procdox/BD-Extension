@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
-import { AnyInfo, ArgInfo, BDType, TokenType, TokenNames} from "./enums";
+import { AnyInfo, ArgInfo, BDType, TokenType, TokenNames, TypeInst} from "./enums";
 import { ExprReader, IndexNode, NameNode, PropertyNode, } from './parse_expr';
 import { BUILTINS } from './builtins';
 
@@ -14,7 +14,7 @@ export class Token {
   readonly value:string;
   readonly pos:number;
   readonly size:number;
-  hover_info:AnyInfo = BDType.Unknown;
+  hover_info:Maybe<TypeInst> = undefined;
   issues:string[] = [] // issues internal to the line, that cannot be fixed by modifying other lines
   temp_issues:string[] = []; // issues determined during AST eval
 
