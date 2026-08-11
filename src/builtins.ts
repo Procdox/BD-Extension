@@ -1,4 +1,4 @@
-import { AnyInfo, ArgInfo, BDType, ObjInfo, PropInfos, VarInfo } from "./lang_types";
+import { AnyInfo, ArgInfo, BDType, ObjInfo, PropInfos } from "./enums";
 
 export const STRING_PROPS:PropInfos = new Map<string,AnyInfo>();
 export const LIST_PROPS:PropInfos = new Map<string,AnyInfo>();
@@ -20,7 +20,7 @@ const user_arg:ArgInfo = {name:"user",wants:BDType.String, description:"I FIGHT 
 const pwrd_arg:ArgInfo = {name:"password",wants:BDType.String, description:"You didn't say the magic word"}
 const path_arg:ArgInfo = {name:"path",wants:BDType.String, description:"A filepath"}
 const data_arg:ArgInfo = {name:"content",wants:BDType.String}
-const val_arg:ArgInfo = {name:"val",wants:BDType.Anything}
+const val_arg:ArgInfo = {name:"val",wants:BDType.Unknown}
 const url_arg:ArgInfo = {name:"url", wants:BDType.String}
 
 const RET_CONNECT:ObjInfo = makeRet([
@@ -94,16 +94,16 @@ makeProp(STRING_PROPS, "split", "cut a string into a list at each separator", [{
 // List Methods
 makeProp(LIST_PROPS, "append", "Add val to the end of the list", [val_arg], BDType.Null);
 makeProp(LIST_PROPS, "insert", "Insert val at index i, shifting the rest right", [{name:"i", wants:BDType.Number},val_arg], BDType.Null);
-makeProp(LIST_PROPS, "pop", "Remove and return the last item, or item at index i", [{name:"i", wants:BDType.Number, opt:true}], BDType.Anything);
+makeProp(LIST_PROPS, "pop", "Remove and return the last item, or item at index i", [{name:"i", wants:BDType.Number, opt:true}], BDType.Unknown);
 makeProp(LIST_PROPS, "remove", "remove the item at index i", [{name:"i", wants:BDType.Number}], BDType.Null);
 makeProp(LIST_PROPS, "contains", "true if val is anywhere in the list", [val_arg], BDType.Bool);
 // Object Methods
-makeProp(DICT_PROPS, "keys", "return a list of the keys in the object", [], {t:BDType.List});
+makeProp(DICT_PROPS, "keys", "return a list of the keys in the object", [], {t:BDType.List, elem:BDType.String});
 makeProp(DICT_PROPS, "has", "return true if val is a key in the object", [val_arg], BDType.Bool);
-makeProp(DICT_PROPS, "values", "return a list of the values for each key in the object", [], {t:BDType.List});
+makeProp(DICT_PROPS, "values", "return a list of the values for each key in the object", [], {t:BDType.List, elem:BDType.Unknown});
 
 // Builtins
-makeProp(BUILTINS, "log", "Print to terminal", [{name:"message", wants:BDType.Anything}], BDType.Null);
+makeProp(BUILTINS, "log", "Print to terminal", [{name:"message", wants:BDType.Unknown}], BDType.Null);
 makeProp(BUILTINS, "range", "numeric range", [{name:"start",wants:BDType.Number,description:"If this is the only arg, this is stop (starts at 0)"}, {name:"stop", wants:BDType.Number, opt:true}, {name:"step",wants:BDType.Number, opt:true}], BDType.Null);
 makeProp(BUILTINS, "len", "list or string length", [{name:"list",wants:[BDType.List, BDType.String]}], BDType.Number);
 makeProp(BUILTINS, "str", "cast to string", [val_arg], BDType.String);
@@ -117,7 +117,7 @@ makeProp(BUILTINS, "connect", "Open a connection", [target_arg, port_arg, {...pw
 makeProp(BUILTINS, "disconnect", "Close connection", [conn_arg], BDType.Null);
 makeProp(BUILTINS, "get_target", "Mission Target {ip, hostname}", [], makeRet([["ip",BDType.String],["hostname",BDType.String]]));
 makeProp(BUILTINS, "resolve_hostname", "Resolve a hostname to an IP via /etc/hosts", [{name:"hostname", wants:BDType.String}], BDType.String)
-makeProp(BUILTINS, "traces", "Lists active and recovering traces", [], {t:BDType.List});
+makeProp(BUILTINS, "traces", "Lists active and recovering traces", [], {t:BDType.List, elem:makeRet([["ip", BDType.String], ["hostname", BDType.String], ["status", BDType.String], ["remaining", BDType.Number], ["total", BDType.Number]])});
 // Security
 makeProp(BUILTINS, "get_security", "Server security level (0.0-1.0)", [conn_arg], BDType.Number);
 makeProp(BUILTINS, "probe_vuln", "Check next vulnerability (no side effects)", [conn_arg], RET_PROBEVULN);
@@ -129,9 +129,9 @@ makeProp(BUILTINS, "crack", "Crack a password (progressive)",[conn_arg, user_arg
 makeProp(BUILTINS, "brute_web", "Crack a web login (progressive)",[conn_arg, user_arg], RET_BRUTEWEB);
 makeProp(BUILTINS, "local_crack", "Crack from inside (quieter)",[user_arg], RET_BRUTEWEB);
 makeProp(BUILTINS, "su", "Switch user",[user_arg, pwrd_arg], BDType.Bool);
-makeProp(BUILTINS, "get_users", "List user accounts",[conn_arg], {t:BDType.List});
+makeProp(BUILTINS, "get_users", "List user accounts",[conn_arg], {t:BDType.List, elem:makeRet([["name",BDType.String],["home",BDType.String],["shell",BDType.String]])});
 // Files
-makeProp(BUILTINS, "list_files", "List directory contents", [conn_arg, path_arg], {t:BDType.List});
+makeProp(BUILTINS, "list_files", "List directory contents", [conn_arg, path_arg], {t:BDType.List, elem:makeRet([["name",BDType.String],["path",BDType.String],["type",BDType.String],["size",BDType.Number],["owner",BDType.String]])});
 makeProp(BUILTINS, "read_file", "Read a file", [conn_arg, path_arg], RET_READFILE);
 makeProp(BUILTINS, "write_file", "Write to a remote file", [conn_arg, path_arg, data_arg], BDType.Bool);
 makeProp(BUILTINS, "download", "Download to ~/downloads/", [conn_arg, path_arg], RET_DOWNLOAD);
@@ -150,7 +150,7 @@ makeProp(BUILTINS, "sleep", "Wait. Reduces noise slightly", [{name:"seconds", wa
 BUILTINS.set("get_time", BUILTINS.get("get_trace_time")!);
 BUILTINS.set("get_detection", BUILTINS.get("get_noise")!);
 // Local Files
-makeProp(BUILTINS, "my_files", "List files on your local machine", [], {t:BDType.List});
+makeProp(BUILTINS, "my_files", "List files on your local machine", [], {t:BDType.List, elem:makeRet([["name",BDType.String],["path",BDType.String],["type",BDType.String],["size",BDType.Number]])});
 makeProp(BUILTINS, "read_local", "Read a local file", [path_arg], BDType.String);
 makeProp(BUILTINS, "save", "Save data to a local file", [path_arg, data_arg], BDType.Null);
 makeProp(BUILTINS, "local_mkdir", "Create a directory on your local machine", [path_arg], BDType.Bool);
@@ -172,10 +172,10 @@ makeProp(BUILTINS, "detect_encryption", "Check encryption type", [conn_arg, path
 // Shop - HoneyCheck
 makeProp(BUILTINS, "is_honeypot", "Detect honeypot servers", [target_arg, port_arg], BDType.Bool);
 // Shop - PatternKit
-makeProp(BUILTINS, "extract_ips", "Extract IPv4 addresses", [data_arg], {t:BDType.List});
-makeProp(BUILTINS, "extract_emails", "Extract email addresses", [data_arg], {t:BDType.List});
-makeProp(BUILTINS, "extract_urls", "Extract http/https URLs", [data_arg], {t:BDType.List});
-makeProp(BUILTINS, "extract_credentials", "Extract password/key/token", [data_arg], {t:BDType.List});
+makeProp(BUILTINS, "extract_ips", "Extract IPv4 addresses", [data_arg], {t:BDType.List, elem:BDType.String});
+makeProp(BUILTINS, "extract_emails", "Extract email addresses", [data_arg], {t:BDType.List, elem:BDType.String});
+makeProp(BUILTINS, "extract_urls", "Extract http/https URLs", [data_arg], {t:BDType.List, elem:BDType.String});
+makeProp(BUILTINS, "extract_credentials", "Extract password/key/token", [data_arg], {t:BDType.List, elem:BDType.String});
 // Shop - FireBreak
 makeProp(BUILTINS, "fast_bypass", "Enhanced firewall bypass", [target_arg], RET_CHIPLAYER);
 // Shop - Crack Source
@@ -195,12 +195,12 @@ makeProp(BUILTINS, "browse", "unknown", [url_arg], RET_BROWSE);
 makeProp(BUILTINS, "click", "unknown", [{name:"text", wants:BDType.String}], RET_BROWSE);
 makeProp(BUILTINS, "fill_form", "unknown", [{name:"field", wants:BDType.String}, {name:"value", wants:BDType.String}], BDType.Bool);
 makeProp(BUILTINS, "submit_form", "unknown", [], RET_BROWSE);
-makeProp(BUILTINS, "find_links", "unknown", [{name:"html", wants:BDType.String}], {t:BDType.List});
-makeProp(BUILTINS, "find_forms", "unknown", [{name:"html", wants:BDType.String}], {t:BDType.List});
+makeProp(BUILTINS, "find_links", "unknown", [{name:"html", wants:BDType.String}], {t:BDType.List, elem:makeRet([["text", BDType.String], ["href", BDType.String]])});
+makeProp(BUILTINS, "find_forms", "unknown", [{name:"html", wants:BDType.String}], {t:BDType.List, elem:makeRet([["action", BDType.String], ["fields", makeRet([["name", BDType.String], ["type", BDType.String]])]])});
 // mail/SMTP
 makeProp(BUILTINS, "smtp_connect", "Open a connection to a mail server (port 25) - No auth required", [target_arg], makeRet([["id",BDType.Number],["success",BDType.Bool],["banner",BDType.String]]));
 makeProp(BUILTINS, "smtp_login", "Authenticate to a mailbox", [conn_arg, user_arg, pwrd_arg], BDType.Bool);
-makeProp(BUILTINS, "smtp_read", "Read a mailbox. Requires smtp_login() for that user first.", [conn_arg, user_arg], {t:BDType.List});
+makeProp(BUILTINS, "smtp_read", "Read a mailbox. Requires smtp_login() for that user first.", [conn_arg, user_arg], {t:BDType.List, elem:makeRet([["from",BDType.String],["subject",BDType.String],["body",BDType.String]])});
 makeProp(BUILTINS, "smtp_send", "Send an email", [conn_arg, {name:"from", wants:BDType.String}, {name:"to", wants:BDType.String}, {name:"subject", wants:BDType.String}, {name:"body", wants:BDType.String}], BDType.Bool);
 
 /* 

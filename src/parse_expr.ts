@@ -1,61 +1,57 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
-import { AnyInfo, BDType, BDTypeNames, ErrNode, ExprNode, NULL_NODE, NULL_TOKEN, ObjInfo, ParseToken, PropInfos, TokenType } from "./lang_types";
+import { Token } from "./parse_tokens"
+import { AnyInfo, BDType, BDTypeNames, FuncInfo, ListInfo, ObjInfo, PropInfos, TokenType } from "./enums";
 import { BUILTINS, DICT_PROPS, LIST_PROPS, STRING_PROPS } from './builtins';
 
-export class ExprReader {
-  tokens:ParseToken[];
+export class TokenReader {
+  tokens:Token[];
   pos:number;
   end:number;
-  cur:Maybe<ParseToken> = undefined;
-  errors:{pos:number, msg:string}[] = [];
-  references:NameNode[] = [];
-  ast:ExprNode;
-  constructor(tokens:ParseToken[], start:number, end:number){
+  cur:Maybe<Token>;
+  constructor(tokens:Token[], start:number, end:number){
     this.tokens = tokens;
     this.pos = start;
     this.end = end;
     if(this.pos >= this.end){
       throw new Error("Tried to read empty expression token sequence");
     }
-    //dm(`ExprReader(...,${start},${end}):` + this.tokens.slice(this.pos,this.end).map(e=>e.dbg()).join(" "));
     this.cur = this.tokens[this.pos];
-    this.ast = this.parseExpression();
-    if(this.pos < this.end){
-      this.addError("Unexpected token after expression")
-    }
   }
   isNext(t:TokenType|TokenType[]){
     return this.cur ? this.cur.isType(t) : false;
   }
-  takeNext() : ParseToken {
+  takeNext() : Token {
     const val = this.cur;
     if(val === undefined) throw new Error("Tried to take undefined token");
     this.pos += 1;
     this.cur = (this.pos < this.end) ? this.tokens[this.pos] : undefined;
     return val;
   }
-  takeNextIf(t:TokenType|TokenType[]) : Maybe<ParseToken> {
+  takeNextIf(t:TokenType|TokenType[]) : Maybe<Token> {
     if(this.isNext(t)) return this.takeNext();
     return undefined;
   }
   addError(msg:string){
     const best_pos = Math.min(this.pos, this.tokens.length-1);
     this.tokens[best_pos].issues.push(msg);
-    this.errors.push({pos:this.pos, msg:msg});
   }
-  dbgPeek(){
-    if(this.cur){
-      dm("PEEK: " + this.cur.dbg())
-    }
-    else {
-      dm("PEEK: <EOL>")
-    }
-  }
-  expectNext(t:TokenType|TokenType[], msg:string) : Maybe<ParseToken> {
+  expectNext(t:TokenType|TokenType[], msg:string) : Maybe<Token> {
     if(this.isNext(t)) return this.takeNext();
     this.addError(msg);
     return undefined;
+  }
+};
+
+export class ExprReader extends TokenReader {
+  references:NameNode[] = [];
+  ast:ExprNode;
+  constructor(tokens:Token[], start:number, end:number){
+    super(tokens, start, end);
+    this.ast = this.parseExpression();
+    if(this.pos < this.end){
+      this.addError("Unexpected token after expression")
+    }
   }
   parseList(result:ExprNode[], end_token:TokenType, end_err:string){
     while(!this.isNext(end_token)){
@@ -181,7 +177,7 @@ export class ExprReader {
     stack[0].finalize();
     return stack[0];
   }
-  resolveRefs(tracker:{get:(name:string)=> Maybe<ParseToken>}, actual_line:number, issues:{l:number, t:ParseToken, m:string}[]){
+  resolveRefs(tracker:{get:(name:string)=> Maybe<ExprNode>}, actual_line:number, issues:{l:number, t:Token, m:string}[]){
     for(let ref_idx = 0; ref_idx < this.references.length; ref_idx++){
       const cur_ref = this.references[ref_idx];
       const ref_name = cur_ref.token.content();
@@ -189,22 +185,22 @@ export class ExprReader {
       if(decl === undefined) {
         const bi_info = BUILTINS.get(ref_name);
         if(bi_info !== undefined){
-          cur_ref.token.setInfo(bi_info);
+          cur_ref.type_data.setInfo(bi_info);
         }
         else {
-          cur_ref.token.setInfo(BDType.Anything);
+          cur_ref.type_data.setInfo(BDType.Unknown);
           issues.push({l:actual_line, t:cur_ref.token, m:"Reference to undeclared variable"});
         }
       }
       else {
-        cur_ref.token.setRef(decl);
+        cur_ref.type_data.setInfo(decl.type_data.info);
       }
     }
   }
-  evalRvalTarget(expr_info:AnyInfo){
+  /*evalRvalTarget(expr_info:AnyInfo){
     let focus:ExprNode = this.ast;
     let prop_name:Maybe<string> = undefined;
-    let src_token:Maybe<ParseToken> = undefined;
+    let src_token:Maybe<Token> = undefined;
     if(focus instanceof PropertyNode){
       if(focus.property instanceof ErrNode) return;
       prop_name = focus.property.content();
@@ -227,42 +223,129 @@ export class ExprReader {
     else {
       src_token.addInfo(expr_info);
     }
-  }
-  eval() : AnyInfo[] {
+  }*/
+  eval() : AnyInfo {
     this.ast.doEval();
-    return this.ast.token.getInfo();
+    return this.ast.type_data.info;
   }
   teardown() {
     this.ast.teardown();
   }
 }
 
+class TypeData {
+  token:Token;
+  info:AnyInfo = BDType.Unknown;
+  constructor(token:Token){
+    this.token = token;
+  }
+  setInfo(info:AnyInfo){
+    this.info = info
+    this.token.hover_info = info;
+  }
+  canBe(t:BDType){
+    return this.info == BDType.Unknown || (typeof this.info === "number" ? this.info : this.info.t) === t;
+  }
+  is(t:BDType){
+    return (typeof this.info === "number" ? this.info : this.info.t) === t;
+  }
+  asFunc() : Maybe<FuncInfo> {
+    if(typeof this.info === "number" || this.info.t !== BDType.FuncRef) return undefined;
+    return this.info;
+  }
+  asList() : Maybe<ListInfo> {
+    if(typeof this.info === "number" || this.info.t !== BDType.List) return undefined;
+    return this.info;
+  }
+  asObject() : Maybe<ObjInfo> {
+    if(typeof this.info === "number" || this.info.t !== BDType.Object) return undefined;
+    return this.info;
+  }
+};
 
-
-
-class RawNode extends ExprNode {
-  constructor(token:ParseToken){
+export abstract class ExprNode {
+  readonly token:Token;
+  parent:Maybe<ExprNode> = undefined;
+  children:ExprNode[] = [];
+  eval_dirty:boolean = true;
+  type_data:TypeData;
+  addChild(child:ExprNode){
+    child.parent = this;
+    this.children.push(child);
+  }
+  constructor(token:Token){ 
+    this.token = token; 
+    this.type_data = new TypeData(this.token);
+  }
+  dbg(depth:number){
+    const pad = "  ".repeat(depth);
+    dm(pad + this.token.dbg());
+  }
+  recDbg(depth:number) {
+    this.dbg(depth);
+    this.children.forEach(c=>c.recDbg(depth+1));
+  }
+  doEval(){
+    if(!this.eval_dirty) return;
+    this.token.temp_issues = [];
+    this.eval_dirty = false;
+    this.children.forEach(c=>c.doEval());
+    this.eval();
+  }
+  markDirty(){
+    let focus:Maybe<ExprNode> = this;
+    while(focus != undefined && !focus.eval_dirty){
+      focus.eval_dirty = true;
+      focus = focus.parent;
+    }
+  }
+  teardown(){
+    this.children.forEach(c=>c.teardown());
+  }
+  abstract eval() : void;
+  
+};
+export class ErrNode extends ExprNode {
+  constructor(token:Token){
     super(token);
-    token.errorIfNot([TokenType.True, TokenType.False, TokenType.Null, TokenType.Number, TokenType.String, TokenType.Name]);
-    if(this.token.group == TokenType.True || this.token.group == TokenType.False){
-      this.token.setInfo(BDType.Bool);
-    }
-    else if(this.token.group == TokenType.Null){
-      this.token.setInfo(BDType.Null);
-    }
-    else if(this.token.group == TokenType.Number){
-      this.token.setInfo(BDType.Number);
-    }
-    else if(this.token.group == TokenType.String){
-      this.token.setInfo(BDType.String);
-    }
+  }
+  eval() {
+    this.token.temp_issues = [];
+  }
+  recDbg(depth:number){
+    const pad = "  ".repeat(depth);
+    dm(pad + "<MISSING>");
+  }
+};
+
+export class NameNode extends ExprNode {
+  constructor(token:Token){
+    super(token);
+    token.errorIfNot([TokenType.Name]);
   }
   eval() {}
 };
-export class NameNode extends ExprNode {
-  constructor(token:ParseToken){
+
+export const NULL_TOKEN = new Token(0,0,TokenType.Null,"");
+export const NULL_NODE = new ErrNode(NULL_TOKEN);
+
+
+class RawNode extends ExprNode {
+  constructor(token:Token){
     super(token);
-    token.errorIfNot([TokenType.Name]);
+    token.errorIfNot([TokenType.True, TokenType.False, TokenType.Null, TokenType.Number, TokenType.String, TokenType.Name]);
+    if(this.token.group == TokenType.True || this.token.group == TokenType.False){
+      this.type_data.setInfo(BDType.Bool);
+    }
+    else if(this.token.group == TokenType.Null){
+      this.type_data.setInfo(BDType.Null);
+    }
+    else if(this.token.group == TokenType.Number){
+      this.type_data.setInfo(BDType.Number);
+    }
+    else if(this.token.group == TokenType.String){
+      this.type_data.setInfo(BDType.String);
+    }
   }
   eval() {}
 };
@@ -275,7 +358,7 @@ class ListNode extends ExprNode {
     this.elements.forEach(elem=>this.addChild(elem));
   }
   eval() {
-    this.token.setInfo({t:BDType.List});
+    this.type_data.setInfo({t:BDType.List, elem:BDType.Unknown});
   }
 };
 class DictNode extends ExprNode {
@@ -297,9 +380,9 @@ class DictNode extends ExprNode {
   eval() {
     const props:PropInfos = new Map<string,AnyInfo>();
     this.elements.forEach((prop)=>{
-      props.set(prop.key.token.content(), prop.value.token.getInfo()[0]);
+      props.set(prop.key.token.content(), prop.value.type_data.info);
     });
-    this.token.setInfo({t:BDType.Object, props:props});
+    this.type_data.setInfo({t:BDType.Object, props:props});
   }
 };
 
@@ -315,18 +398,15 @@ class CallNode extends ExprNode {
     this.args.forEach(arg=>this.addChild(arg));
   }
   eval() {
-    this.token.setInfo(BDType.Anything);
+    this.type_data.setInfo(BDType.Unknown);
     if(this.src instanceof NameNode){
-      const func_infos = this.src.token.getInfo();
-      if(func_infos.length != 1){
-        this.token.temp_issues.push(`${this.src.token.content()} is ambiguously typed`);
-      }
-      const func_info = func_infos[0];
-      if(typeof func_info === "number" || func_info.t !== BDType.FuncRef) {
+      const func_info = this.src.type_data.asFunc();
+      if(func_info === undefined) {
+        this.type_data.setInfo(BDType.Unknown);
         this.token.temp_issues.push(`${this.src.token.content()} is not a function`);
         return;
       }
-      this.token.setInfo(func_info.ret);
+      this.type_data.setInfo(func_info.ret);
       
       for(let idx = 0; idx < func_info.args.length; idx++){
         const api = func_info.args[idx];
@@ -334,17 +414,16 @@ class CallNode extends ExprNode {
           if(api.opt !== true) this.token.temp_issues.push("Incorrect number of args");
           break;
         }
-        if(api.wants == BDType.Anything) continue;
+        if(api.wants == BDType.Unknown) continue;
         const used = this.args[idx];
-        const used_info = used.token.getInfo();
         if(api.wants instanceof Array){
-          if(!api.wants.some(api_t => used.token.canBe(api_t))){
+          if(!api.wants.some(api_t => used.type_data.canBe(api_t))){
             const expect_str = api.wants.map(api_t=>BDTypeNames[api_t]).join("/");
             used.token.temp_issues.push(`Incorrect arg type. Expected ${expect_str}}`);
           }
         }
         else {
-          if(!used.token.canBe(api.wants)){
+          if(!used.type_data.canBe(api.wants)){
             used.token.temp_issues.push(`Incorrect arg type. Expected ${BDTypeNames[api.wants]}`);
           }
         }
@@ -365,68 +444,58 @@ export class IndexNode extends ExprNode {
     this.addChild(this.index);
   }
   eval() {
-    const src_infos = this.src.token.getInfo();
-    let last_err:string = "No valid types found for target";
-    let last_info:AnyInfo = BDType.Anything;
-    const num_index = this.index.token.canBe(BDType.Number);
-    const str_index = this.index.token.canBe(BDType.String);
-    const valid = src_infos.some(src_info=>{
-      if(typeof src_info !== "number" && src_info.t === BDType.List){
-        if(!num_index){
-          last_err = "Indexes must be numbers for lists";
-        }
+    let best_info:AnyInfo = BDType.Unknown;
+    const src_info = this.src.type_data;
+    const num_index = this.index.type_data.canBe(BDType.Number);
+    const str_index = this.index.type_data.canBe(BDType.String);
+    if(src_info.is(BDType.List)){
+      if(!num_index){
+        this.index.token.temp_issues.push("Indexes must be numbers for lists");
       }
-      else if(src_info === BDType.String){
-        if(!num_index){
-          last_err = "Indexes must be numbers for strings";
-        }
-        last_info = BDType.String;
-        return true;
-      }
-      else if(typeof src_info !== "number" && src_info.t === BDType.Object){
-        if(!str_index){
-          last_err = "Indexes must be strings for objects";
-        }
-        else if(this.index instanceof RawNode) {
-          const prop_name = this.index.token.content();
-          const prop_info = src_info.props.get(prop_name)
-          if(prop_info === undefined){
-            last_err = `Object property ${prop_name} wasn't found`;
-          }
-          else {
-            last_info = prop_info;
-            return true;
-          }
-        }
-      }
-      else {
-        if(!str_index && !num_index){
-          last_err = "Indexes must be either strings for objects, or numbers for lists/strings";
-        }
-        if(src_info !== BDType.Anything){
-          last_err = "Indexes are only valid for lists, objects, and strings";
-        }
-      }
-      return false;
-    });
-    if(valid){
-      this.token.setInfo(last_info);
+      best_info = (src_info.info as ListInfo).elem;
     }
-    else{
-      this.token.setInfo(BDType.Anything);
-      this.index.token.temp_issues.push(last_err)
+    else if(src_info.is(BDType.String)){
+      if(!num_index){
+        this.index.token.temp_issues.push("Indexes must be numbers for strings");
+      }
+      best_info = BDType.String;
     }
+    else if(src_info.is(BDType.Object)){
+      if(!str_index){
+        this.index.token.temp_issues.push("Indexes must be strings for objects");
+      }
+      else if(this.index instanceof RawNode) {
+        const prop_name = this.index.token.content();
+        const prop_info = (src_info.info as ObjInfo).props.get(prop_name)
+        if(prop_info === undefined){
+          this.index.token.temp_issues.push(`Object property ${prop_name} wasn't found`);
+        }
+        else {
+          best_info = prop_info;
+        }
+      }
+    }
+    else {
+      if(!str_index && !num_index){
+        this.index.token.temp_issues.push("Indexes must be either strings for objects, or numbers for lists/strings");
+      }
+      if(src_info.info !== BDType.Unknown){
+        this.index.token.temp_issues.push("Indexes are only valid for lists, objects, and strings");
+      }
+    }
+    this.type_data.setInfo(best_info);
   }
 }; 
 export class PropertyNode extends ExprNode {
   src:ExprNode;
-  property:ParseToken;
+  property:Token;
   constructor(left:ExprNode, reader:ExprReader){
     super(reader.takeNext());
     this.token.errorIfNot([TokenType.Dot]);
     this.src = left;
     this.property = reader.expectNext(TokenType.Name, "Expected a property name") ?? NULL_TOKEN;
     this.addChild(left);
+    this.type_data.token = this.property;
   }
   dbg(depth:number){
     const pad = "  ".repeat(depth+1);
@@ -434,65 +503,65 @@ export class PropertyNode extends ExprNode {
   }
   eval() {
     this.property.temp_issues = [];
-    if(this.src.token.canBe(BDType.Anything)) {
-      this.token.setInfo(BDType.Anything);
+    if(this.src.type_data.canBe(BDType.Unknown)) {
+      this.type_data.setInfo(BDType.Unknown);
       return;
     }
-
     
-    const maybe_list = this.src.token.canBe(BDType.List);
-    const maybe_dict = this.src.token.canBe(BDType.Object);
-    const maybe_string = this.src.token.canBe(BDType.String);
+    const maybe_list = this.src.type_data.canBe(BDType.List);
+    const maybe_dict = this.src.type_data.canBe(BDType.Object);
+    const maybe_string = this.src.type_data.canBe(BDType.String);
     if(!maybe_dict && !maybe_list && !maybe_string) {
       this.property.temp_issues.push("Properties can only be taken from lists, objects, and strings");
-      this.token.setInfo(BDType.Anything);
+      this.type_data.setInfo(BDType.Unknown);
       return;
     }
 
     const prop_name = this.property.content();
     
     if(maybe_list){
+      if(prop_name == "pop" && this.src.type_data.is(BDType.List)){
+        this.type_data.setInfo((this.src.type_data.info as ListInfo).elem);
+        return;
+      }
       const bi_info = LIST_PROPS.get(prop_name);
       if(bi_info !== undefined){
-        this.token.setInfo(bi_info);
+        this.type_data.setInfo(bi_info);
         return;
       }
     }
     if(maybe_dict){
       const bi_info = DICT_PROPS.get(prop_name);
       if(bi_info !== undefined){
-        this.token.setInfo(bi_info);
+        this.type_data.setInfo(bi_info);
         return;
       }
     }
     if(maybe_string){
       const bi_info = STRING_PROPS.get(prop_name);
       if(bi_info !== undefined){
-        this.token.setInfo(bi_info);
+        this.type_data.setInfo(bi_info);
         return;
       }
     }
     
 
-    const src_info = this.src.token.getInfo();
-    for(let idx = 0; idx < src_info.length;idx++){
-      const info = src_info[idx];
-      if(typeof info !== "number" && info.t === BDType.Object){
-        const user_info = info.props.get(prop_name);
-        if(user_info !== undefined){
-          this.token.setInfo(user_info);
-          return;
-        }
+    const src_info = this.src.type_data;
+    if(src_info.is(BDType.Object)){
+      const user_info = (src_info.info as ObjInfo).props.get(prop_name);
+      if(user_info !== undefined){
+        this.type_data.setInfo(user_info);
+        return;
       }
     }
     this.property.temp_issues.push(`Property ${prop_name} wasn't found`);
-    this.token.setInfo(BDType.Anything);
+    this.type_data.setInfo(BDType.Unknown);
   }
 }; 
 
 class UnaryNode extends ExprNode {
   right:ExprNode = NULL_NODE;
-  constructor(token:ParseToken, parent?:UnaryNode){
+  constructor(token:Token, parent?:UnaryNode){
     super(token);
     token.errorIfNot([TokenType.Not, TokenType.Sub, TokenType.Invert]);
     if(parent) {
@@ -501,26 +570,25 @@ class UnaryNode extends ExprNode {
     }
   }
   eval() {
-    const child_t = this.right.token.getInfo();
     if(this.token.group == TokenType.Not){
       // TODO: implicit truth casting?
-      if(!this.right.token.canBe(BDType.Number)){
+      if(!this.right.type_data.canBe(BDType.Number)){
         this.right.token.temp_issues.push("Expected Boolean");
       }
-      this.token.setInfo(BDType.Bool);
+      this.type_data.setInfo(BDType.Bool);
     }
     else {
-      if(!this.right.token.canBe(BDType.Number)){
+      if(!this.right.type_data.canBe(BDType.Number)){
         this.right.token.temp_issues.push("Expected Number");
       }
-      this.token.setInfo(BDType.Number);
+      this.type_data.setInfo(BDType.Number);
     }
   }
 };
 class BinaryNode extends ExprNode {
   left:ExprNode = NULL_NODE;
   right:ExprNode = NULL_NODE;
-  constructor(token:ParseToken){
+  constructor(token:Token){
     super(token);
   }
   finalize(){
@@ -535,22 +603,22 @@ class BinaryNode extends ExprNode {
   }
   eval() {
     if(this.token.group == TokenType.Add){
-      if(this.left.token.canBe(BDType.String) || this.left.token.canBe(BDType.String)){
-        this.token.setInfo(BDType.String);
+      if(this.left.type_data.canBe(BDType.String) || this.left.type_data.canBe(BDType.String)){
+        this.type_data.setInfo(BDType.String);
         return;
       }
     }
     if(this.token.group <= TokenType.RShift){
-      if(!this.left.token.canBe(BDType.Number)){
+      if(!this.left.type_data.canBe(BDType.Number)){
         this.left.token.temp_issues.push("Expected Number");
       }
-      if(!this.right.token.canBe(BDType.Number)){
+      if(!this.right.type_data.canBe(BDType.Number)){
         this.right.token.temp_issues.push("Expected Number");
       }
-      this.token.setInfo(BDType.Number);
+      this.type_data.setInfo(BDType.Number);
     }
     else{
-      this.token.setInfo(BDType.Bool);
+      this.type_data.setInfo(BDType.Bool);
     }
   }
 };
@@ -570,14 +638,14 @@ class TernaryNode extends ExprNode {
     this.addChild(this.false_clause);
   }
   eval() {
-    if(this.condition.token.canBe(BDType.Bool)){
+    if(this.condition.type_data.canBe(BDType.Bool)){
       this.condition.token.temp_issues.push("Expected Boolean");
     }
-    if(this.true_clause.token.getInfo() == this.false_clause.token.getInfo()){
-      this.token.setRef(this.true_clause.token);
+    if(this.true_clause.type_data.info == this.false_clause.type_data.info){
+      this.type_data.setInfo(this.true_clause.type_data.info);
     }
     else {
-      this.token.setInfo(BDType.Anything);
+      this.type_data.setInfo(BDType.Unknown);
     }
   }
 }; 

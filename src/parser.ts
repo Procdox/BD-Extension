@@ -1,10 +1,10 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
-import { AnyInfo, ArgInfo, BDType, ParseToken, TokenNames, TokenType } from "./lang_types";
+import { AnyInfo, ArgInfo, BDType, TokenNames, TokenType } from "./enums";
 import { ExprReader, IndexNode, NameNode, PropertyNode, } from './parse_expr';
 import { BUILTINS } from './builtins';
 import { parseStatement, Statement } from './parse_stmt';
-import { parseTokens, Tokenized } from './parse_tokens';
+import { parseTokens, Token, Tokenized } from './parse_tokens';
 import { FlowStmts, LineData, Scope, ScopeType } from './parse_scopes';
 
 function parseLine(text:string) : LineData {
@@ -86,7 +86,7 @@ export class Parser {
     if(this.top_scope) this.top_scope.buildIssues(issues);
     return issues;
   }
-  getToken(line:number, char:number) : Maybe<ParseToken> {
+  getToken(line:number, char:number) : Maybe<Token> {
     const line_data = this.lines[line];
     for(let idx=0;idx<line_data.tokens.length;idx++){
       const focus = line_data.tokens[idx];

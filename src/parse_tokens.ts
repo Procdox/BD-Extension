@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
-import { AnyInfo, ArgInfo, BDType, ParseToken, TokenNames, TokenType } from "./lang_types";
+import { AnyInfo, ArgInfo, BDType, TokenType, TokenNames} from "./enums";
 import { ExprReader, IndexNode, NameNode, PropertyNode, } from './parse_expr';
 import { BUILTINS } from './builtins';
 
@@ -9,10 +9,46 @@ const LINT_NAME = /([a-zA-Z_][a-zA-Z0-9_]*)/gy
 const LINT_STRING = /('[^'\\]*(?:\\.[^'\\]*)*'|"[^"\\]*(?:\\.[^"\\]*)*")/gy
 const LINT_NUMBER = /([0-9]+(?:\.[0-9]+)?)/gy
 
+export class Token {
+  readonly group:TokenType;
+  readonly value:string;
+  readonly pos:number;
+  readonly size:number;
+  hover_info:AnyInfo = BDType.Unknown;
+  issues:string[] = [] // issues internal to the line, that cannot be fixed by modifying other lines
+  temp_issues:string[] = []; // issues determined during AST eval
+
+  constructor(pos:number, size:number, group:TokenType, value:string){
+    this.group = group;
+    this.value = value;
+    this.pos = pos;
+    this.size = size;
+  }
+  content() {
+    return (this.group !== TokenType.String) ? this.value : this.value.substring(1,this.size-1);
+  }
+
+  isType(t:TokenType|TokenType[]){ return (t instanceof Array) ? t.includes(this.group) : this.group === t; }
+  errorIfNot(t:TokenType|TokenType[]){
+    if(!this.isType(t)){
+      const expected = (t instanceof Array) ? t.map(e=>TokenNames[e]).join(", ") : TokenNames[t];
+      throw new Error(`Token Type Mismatch! Actual: ${TokenNames[this.group]}, Expected: ${expected}`)
+    }
+  }
+  dbg(){ 
+    return `${TokenNames[this.group]}:${this.value}`; 
+  }
+  makeRange(line_idx:number){
+    const s = new vscode.Position(line_idx, this.pos);
+    const r = new vscode.Range(s, s.translate(0,this.size))
+    return r;
+  }
+};
+
 export interface Tokenized {
   text:string;
   indent:number;
-  tokens:ParseToken[];
+  tokens:Token[];
 };
 
 interface LintResult {pos:number,size:number,value:string};
@@ -20,7 +56,7 @@ interface LintResult {pos:number,size:number,value:string};
 
 export function parseTokens(text:string) : Tokenized {
   const indent = /^ */.exec(text)![0].length;
-  const tokens:ParseToken[] = [];
+  const tokens:Token[] = [];
   var cur_pos = 0;
 
   function tryLint(re:RegExp) : Maybe<LintResult> {
@@ -45,16 +81,16 @@ export function parseTokens(text:string) : Tokenized {
     let r:Maybe<{pos:number,size:number,value:string}> = undefined;
     if( (r = tryLint(LINT_OPER)) != undefined ){
       const group = TokenNames.indexOf(r.value);
-      tokens.push(new ParseToken(r.pos, r.size, group, r.value));
+      tokens.push(new Token(r.pos, r.size, group, r.value));
     }
     else if( (r = tryLint(LINT_NUMBER)) ){
-      tokens.push(new ParseToken(r.pos, r.size, TokenType.Number, r.value));
+      tokens.push(new Token(r.pos, r.size, TokenType.Number, r.value));
     }
     else if( (r = tryLint(LINT_STRING)) ){
-      tokens.push(new ParseToken(r.pos, r.size, TokenType.String, r.value));
+      tokens.push(new Token(r.pos, r.size, TokenType.String, r.value));
     }
     else if( (r = tryLint(LINT_NAME)) ){
-      tokens.push(new ParseToken(r.pos, r.size, TokenType.Name, r.value));
+      tokens.push(new Token(r.pos, r.size, TokenType.Name, r.value));
     }
     else {
       break;

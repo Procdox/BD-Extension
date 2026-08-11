@@ -1,9 +1,9 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
-import { AnyInfo, ArgInfo, BDType, ParseToken, TokenNames, TokenType } from "./lang_types";
+import { AnyInfo, ArgInfo, BDType, TokenNames, TokenType } from "./enums";
 import { ExprReader, IndexNode, NameNode, PropertyNode, } from './parse_expr';
 import { BUILTINS } from './builtins';
-import { Tokenized } from './parse_tokens';
+import { Token, Tokenized } from './parse_tokens';
 import { Statement } from './parse_stmt';
 
 export interface LineData extends Tokenized {
@@ -20,7 +20,7 @@ export enum ScopeType {
 
 class DeclTracker {
   scopes:string[][] = []
-  decls:Map<string,ParseToken[]> = new Map<string,ParseToken[]>();
+  decls:Map<string,NameNode[]> = new Map<string,NameNode[]>();
   enterScope(){
     this.scopes.push([]);
   }
@@ -30,7 +30,7 @@ class DeclTracker {
       this.decls.get(left[idx])!.pop();
     }
   }
-  set(name:string, value:ParseToken){
+  set(name:string, value:NameNode){
     const old = this.decls.get(name);
     if(old !== undefined){
       old.push(value);
@@ -40,7 +40,7 @@ class DeclTracker {
     }
     this.scopes[this.scopes.length-1].push(name);
   }
-  get(name:string) : Maybe<ParseToken> {
+  get(name:string) : Maybe<NameNode> {
     const old = this.decls.get(name);
     if(old !== undefined && old.length > 0){
       return old[0];
@@ -55,7 +55,7 @@ export class Scope {
   children:(Scope|LineData)[] = [];
   indent:number;
   unknown_refs:NameNode[] = [];
-  issues:{l:number, t:ParseToken, m:string}[] = [];
+  issues:{l:number, t:Token, m:string}[] = [];
   
   constructor(t:ScopeType, indent:number, parent?:Scope){
     this.t = t;
@@ -78,7 +78,7 @@ export class Scope {
       }
 
       const stmt = focus.stmt!;
-      let expr_result:AnyInfo[] = [BDType.Anything];
+      let expr_result:AnyInfo = BDType.Unknown;
 
       if(stmt.rval_expr){
         stmt.rval_expr.resolveRefs(tracker, focus.linenum, this.issues);
@@ -87,22 +87,22 @@ export class Scope {
       }
       if(stmt.lval_expr){
         stmt.lval_expr.resolveRefs(tracker, focus.linenum, this.issues);
-        stmt.lval_expr.evalRvalTarget(expr_result[0]);
+        //stmt.lval_expr.evalRvalTarget(expr_result[0]);
         stmt.lval_expr.eval();
         //dm(`VarType: ${BDTypeNames[typeof expr_result === "number" ? expr_result : expr_result.t]} ... ${focus.text}`)
       }
 
       if(stmt.t == TokenType.Func && stmt.outer_declares.length > 0) {
-        const func_name = stmt.outer_declares[0].content();
+        const func_name = stmt.outer_declares[0].token.content();
         const func_args:ArgInfo[] = [];
         stmt.inner_declares.forEach((arg)=>{
-          func_args.push({name:arg.content(), wants:BDType.Anything});
+          func_args.push({name:arg.token.content(), wants:BDType.Unknown});
         })
-        expr_result = [{t:BDType.FuncRef, name:func_name, description:"", args:func_args, ret:BDType.Anything}];
+        expr_result = {t:BDType.FuncRef, name:func_name, description:"", args:func_args, ret:BDType.Unknown};
       }
       stmt.outer_declares.forEach((decl)=>{
-        decl.setInfos(expr_result);
-        tracker.set(decl.content(), decl);
+        decl.type_data.setInfo(expr_result);
+        tracker.set(decl.token.content(), decl);
       });
       
 
@@ -113,7 +113,7 @@ export class Scope {
           if(stmt.inner_declares.length > 0){
             tracker.enterScope();
             stmt.inner_declares.forEach((decl)=>{
-              tracker.set(decl.content(), decl);
+              tracker.set(decl.token.content(), decl);
             });
           }
           flow_scope.solve(tracker);
@@ -135,7 +135,7 @@ export class Scope {
           if(stmt.inner_declares.length > 0){
             tracker.enterScope();
             stmt.inner_declares.forEach((decl)=>{
-              tracker.set(decl.content(), decl);
+              tracker.set(decl.token.content(), decl);
             });
           }
           func_scope.solve(tracker);

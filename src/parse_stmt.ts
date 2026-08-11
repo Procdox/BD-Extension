@@ -1,21 +1,23 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
-import { AnyInfo, ArgInfo, BDType, ParseToken, TokenNames, TokenType } from "./lang_types";
-import { ExprReader, IndexNode, NameNode, PropertyNode, } from './parse_expr';
+import { AnyInfo, ArgInfo, BDType, TokenNames, TokenType } from "./enums";
+import { ExprReader, IndexNode, NameNode, PropertyNode, TokenReader, } from './parse_expr';
 import { BUILTINS } from './builtins';
+import { Token } from './parse_tokens';
 
 type StmtType = TokenType.If | TokenType.Elif | TokenType.Else | TokenType.Return | TokenType.For | TokenType.While 
   | TokenType.Break | TokenType.Continue | TokenType.Import | TokenType.Func | TokenType.Var;
 
+type StmtFn = (tokens:Token[])=>Statement;
+
 export class Statement {
   t:StmtType;
-  tokens:ParseToken[];
-  outer_declares:ParseToken[] = [];
-  inner_declares:ParseToken[] = [];
-  assign_ref:Maybe<ParseToken> = undefined;
+  tokens:Token[];
+  outer_declares:NameNode[] = [];
+  inner_declares:NameNode[] = [];
   lval_expr:Maybe<ExprReader> = undefined;
   rval_expr:Maybe<ExprReader> = undefined;
-  constructor(tokens:ParseToken[], t:StmtType){ 
+  constructor(tokens:Token[], t:StmtType){ 
     this.tokens = tokens; 
     this.t = t;
   }
@@ -31,24 +33,20 @@ export class Statement {
     }
     return focus;
   }
-  private _addDecl(pos:number, err_msg:string, arr:ParseToken[]){
+  private _addDecl(pos:number, err_msg:string, arr:Token[]){
     const focus = this.checkIs(pos, {t:TokenType.Name}, err_msg);
     if(focus === undefined) return;
     arr.push(focus);
   }
-  addInnerDecl(pos:number, err_msg:string){
-    this._addDecl(pos, err_msg, this.inner_declares);
-  }
-  addOuterDecl(pos:number, err_msg:string){
-    this._addDecl(pos, err_msg, this.outer_declares);
-  }
-  addLval(end_pos:number){
-    if(end_pos > 0 && this.lval_expr === undefined){
+  setLval(start_pos:number, end_pos:number){
+    if(end_pos > this.tokens.length) end_pos = this.tokens.length;
+    if(end_pos > start_pos && this.lval_expr === undefined){
       this.lval_expr = new ExprReader(this.tokens, 0, end_pos);
     }
     return this.lval_expr;
   }
-  addRval(start_pos:number, end_pos:number){
+  setRval(start_pos:number, end_pos:number){
+    if(end_pos > this.tokens.length) end_pos = this.tokens.length;
     if(end_pos > start_pos && this.rval_expr === undefined){
       this.rval_expr = new ExprReader(this.tokens, start_pos, end_pos);
     }
@@ -61,103 +59,92 @@ export class Statement {
   }
 };
 
-type StmtFn = (tokens:ParseToken[])=>Statement;
+//  ==================================================
+//    Statement Type specific builders
+//  ==================================================
 
-function bldFlowStmt(name:StmtType, has_expr:boolean, has_colon:boolean) : StmtFn { 
+function bldSimpleStmtParser(name:StmtType, has_colon:boolean) : StmtFn {
   const colon_err = `Expected colon at the end of a ${name} statement`;
-  if(has_expr){
-    return (tokens:ParseToken[]) => {
-      const stmt = new Statement(tokens, name); 
-      if(has_colon){
-        stmt.checkIs(tokens.length - 1, {ot:TokenType.Colon}, colon_err);
-      }
-      stmt.addRval(1, tokens.length - (has_colon ? 1 : 0));
-      return stmt;
-    };
-  }
-  else {
-    return (tokens:ParseToken[]) => {
-      const stmt = new Statement(tokens, name); 
-      if(has_colon) stmt.checkIs(1, {ot:TokenType.Colon}, colon_err);
-      stmt.checkSize(has_colon ? 2 : 1);
-      return stmt;
-    }; 
-  }
+  return (tokens:Token[]) => {
+    const stmt = new Statement(tokens, name); 
+    if(has_colon) stmt.checkIs(1, {ot:TokenType.Colon}, colon_err);
+    stmt.checkSize(has_colon ? 2 : 1);
+    return stmt;
+  };
+}
+function bldExprStmtParser(name:StmtType, has_colon:boolean) : StmtFn { 
+  const colon_err = `Expected colon at the end of a ${name} statement`;
+  return (tokens:Token[]) => {
+    const stmt = new Statement(tokens, name); 
+    if(has_colon){
+      stmt.checkIs(tokens.length - 1, {ot:TokenType.Colon}, colon_err);
+    }
+    stmt.setRval(1, tokens.length - (has_colon ? 1 : 0));
+    return stmt;
+  };
 }
 
-function bldForStmt(tokens:ParseToken[]) : Statement {
+function parseForStatement(tokens:Token[]) : Statement {
   const stmt = new Statement(tokens, TokenType.For);
-  stmt.addInnerDecl(1, "Expected iterator variable");
+  const for_name_token = stmt.checkIs(1, {t:TokenType.Name}, "Expected iterator variable");
+  if(for_name_token !== undefined){
+    stmt.inner_declares.push(new NameNode(for_name_token));
+  }
   stmt.checkIs(2, {v:"in"}, "Expected keyword in");
-  stmt.addRval(3, tokens.length - 1);
+  const rval_expr = stmt.setRval(3, tokens.length - 1);
   stmt.checkIs(tokens.length - 1, {ot:TokenType.Colon}, "Expected colon at the end of a for statement");
   return stmt;
 }
-function bldFuncStmt(tokens:ParseToken[]) : Statement {
+function parseFuncStmt(tokens:Token[]) : Statement {
   const stmt = new Statement(tokens, TokenType.Func);
-  stmt.addOuterDecl(1, "Expected function name");
-  stmt.checkIs(2, {ot:TokenType.OpenRound}, "Expected open paren");
-  let cur_idx = 3;
-  let last = "(";
-  while(cur_idx < tokens.length){
-    const focus = tokens[cur_idx];
-    if(focus.isType(TokenType.CloseRound)){
-      if(last == ","){
-        focus.issues.push("Expected another function argument");
-      }
-      last = ")";
-      break;
-    }
-    else if(focus.isType(TokenType.Name)){
-      if(last != "(" && last != ","){
-        focus.issues.push("Expected a comma seperating function arguments");
-      }
-      stmt.addInnerDecl(cur_idx, "NOT REACHABLE");
-      last = "n"
-    }
-    else if(focus.isType(TokenType.Comma)){
-      if(last != "n"){
-        focus.issues.push("Unexpected comma, no preceding function argument?");
-      }
-      last = ",";
-    }
-    else {
-      focus.issues.push("Expected name in function arguments");
-    }
-    cur_idx += 1;
+  const arg_reader = new TokenReader(tokens, 1, tokens.length);
+  const func_name_token = arg_reader.expectNext(TokenType.Name, "Expected function name");
+  if(func_name_token === undefined) return stmt;
+  stmt.outer_declares.push(new NameNode(func_name_token));
+  if(arg_reader.expectNext(TokenType.OpenRound, "Expected open paren") === undefined) return stmt;
+  
+  while(!arg_reader.isNext(TokenType.CloseRound)){
+    const arg_name_token = arg_reader.expectNext(TokenType.Name, "Expected function argument name");
+    if(arg_name_token === undefined) return stmt;
+    stmt.inner_declares.push(new NameNode(arg_name_token));
+    if(!arg_reader.takeNextIf(TokenType.Comma)) break;
   }
-  if(last != ")"){
-    stmt.checkIs(cur_idx, {ot:TokenType.OpenRound}, "Expected close paren");
-  }
-  stmt.checkIs(cur_idx+1, {ot:TokenType.Colon}, "Expected colon at the end of a func statement");
-  stmt.checkSize(cur_idx+2);
+  if(arg_reader.expectNext(TokenType.CloseRound, "Expected close paren") === undefined) return stmt;
+  if(arg_reader.expectNext(TokenType.Colon, "Expected a colon at the end of a func statement") === undefined) return stmt;
+  stmt.checkSize(arg_reader.pos);
   return stmt;
 }
-function bldImportStmt(tokens:ParseToken[]) : Statement {
+function parseImportStmt(tokens:Token[]) : Statement {
   const stmt = new Statement(tokens, TokenType.Import);
   const name = stmt.checkIs(1, {t:TokenType.String}, "Expected an import path string literal")
   if(tokens.length > 2){
     stmt.checkIs(2, {v:"as"}, "Expected keyword as");
-    stmt.addOuterDecl(3, "Expected import alias");
+    const alias_name_token = stmt.checkIs(3, {t:TokenType.Name}, "Expected import alias");
+    if(alias_name_token != undefined){
+      stmt.outer_declares.push(new NameNode(alias_name_token));
+    }
     stmt.checkSize(4);
   }
   else if(name !== undefined){
-    stmt.outer_declares.push(name);
+    stmt.outer_declares.push(new NameNode(name));
   }
   return stmt;
 }
-function bldVarStmt(tokens:ParseToken[]) : Statement {
+function parseVarStmt(tokens:Token[]) : Statement {
   const stmt = new Statement(tokens, TokenType.Var);
-  stmt.addOuterDecl(1, "Expected variable name");
-  stmt.checkIs(2, {ot:TokenType.Assign}, "Expected an assignment operator (=)")
-  stmt.addRval(3, tokens.length);
+  const var_name_token = stmt.checkIs(1, {t:TokenType.Name}, "Expected variable name");
+  if(var_name_token != undefined){
+    stmt.outer_declares.push(new NameNode(var_name_token));
+  }
+  stmt.checkIs(2, {ot:TokenType.Assign}, "Expected an assignment operator (=)");
+  stmt.setRval(3, tokens.length);
   return stmt;
 }
-function bldExpression(tokens:ParseToken[]) : Statement {
+function parseExpression(tokens:Token[]) : Statement {
   const stmt = new Statement(tokens, TokenType.Var);
   const assign_idx = tokens.findIndex(t=>t.group >= TokenType.Assign && t.group <= TokenType.Decrement);
   if(assign_idx >= 0){
-    const lval_expr = stmt.addLval(assign_idx);
+    const lval_expr = stmt.setLval(0, assign_idx);
     if(lval_expr === undefined){
       tokens[0].issues.push("Unexpected or missing assignment target");
     }
@@ -165,29 +152,29 @@ function bldExpression(tokens:ParseToken[]) : Statement {
       tokens[0].issues.push("Invalid assignment target");
     }
   }
-  stmt.addRval(assign_idx+1, tokens.length)
+  stmt.setRval(assign_idx+1, tokens.length)
   return stmt;
 }
 
 const StmtFactory:Map<TokenType,StmtFn> = new Map<TokenType,StmtFn>([
-  [TokenType.If, bldFlowStmt(TokenType.If, true, true)],
-  [TokenType.Elif, bldFlowStmt(TokenType.Elif, true, true)],
-  [TokenType.Else, bldFlowStmt(TokenType.Else, false, true)],
-  [TokenType.Return, bldFlowStmt(TokenType.Return, true, false)],
-  [TokenType.While, bldFlowStmt(TokenType.While, true, true)],
-  [TokenType.Break, bldFlowStmt(TokenType.Break, false, false)],
-  [TokenType.Continue, bldFlowStmt(TokenType.Continue, false, false)],
-  [TokenType.For, bldForStmt],
-  [TokenType.Func, bldFuncStmt],
-  [TokenType.Import, bldImportStmt],
-  [TokenType.Var, bldVarStmt],
+  [TokenType.If, bldExprStmtParser(TokenType.If, true)],
+  [TokenType.Elif, bldExprStmtParser(TokenType.Elif, true)],
+  [TokenType.While, bldExprStmtParser(TokenType.While, true)],
+  [TokenType.Return, bldExprStmtParser(TokenType.Return, false)],
+  [TokenType.Else, bldSimpleStmtParser(TokenType.Else, true)],
+  [TokenType.Break, bldSimpleStmtParser(TokenType.Break, false)],
+  [TokenType.Continue, bldSimpleStmtParser(TokenType.Continue, false)],
+  [TokenType.For, parseForStatement],
+  [TokenType.Func, parseFuncStmt],
+  [TokenType.Import, parseImportStmt],
+  [TokenType.Var, parseVarStmt],
 ]);
 
-export function parseStatement(tokens:ParseToken[]) : Maybe<Statement> {
+export function parseStatement(tokens:Token[]) : Maybe<Statement> {
   if(tokens.length == 0) return undefined;
   const builder = StmtFactory.get(tokens[0].group);
   if(builder !== undefined){
     return builder(tokens);
   }
-  return bldExpression(tokens);
+  return parseExpression(tokens);
 }
