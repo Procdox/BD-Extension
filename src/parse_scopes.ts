@@ -85,6 +85,7 @@ export class Scope {
       if(stmt.rval_expr){
         stmt.rval_expr.resolveRefs(tracker, focus.linenum, this.issues);
         expr_result = stmt.rval_expr.eval()
+        stmt.rval_expr.populateCallArgTypes();
         //dm(`VarType: ${BDTypeNames[typeof expr_result === "number" ? expr_result : expr_result.t]} ... ${focus.text}`)
       }
       if(stmt.lval_expr){
@@ -120,7 +121,8 @@ export class Scope {
           const func_name = stmt.outer_declares[0].token.content();
           const func_args:ArgInfo[] = [];
           stmt.inner_declares.forEach((arg)=>{
-            func_args.push({name:arg.token.content(), wants:BDType.Unknown});
+            arg.type_data.setSrc({t:BDType.Union,alts:[]})
+            func_args.push({name:arg.token.content(), wants:BDType.Unknown, inst:arg.type_data.used});
           })
           expr_result = {t:BDType.FuncRef, name:func_name, description:"", args:func_args, ret:{t:BDType.Union, alts:[]}};
         }

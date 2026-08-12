@@ -70,7 +70,7 @@ export class ExprReader extends TokenReader {
     // parse value
     if(this.isNext([TokenType.Name])){
       const name_node = new NameNode(this.takeNext());
-      dm("Ref: " + name_node.token.content())
+      //dm("Ref: " + name_node.token.content())
       this.references.push(name_node)
       return name_node;
     }
@@ -178,8 +178,7 @@ export class ExprReader extends TokenReader {
     return stack[0];
   }
   resolveRefs(tracker:{get:(name:string)=> Maybe<ExprNode>}, actual_line:number, issues:{l:number, t:Token, m:string}[]){
-    for(let ref_idx = 0; ref_idx < this.references.length; ref_idx++){
-      const cur_ref = this.references[ref_idx];
+    for(let cur_ref of this.references){
       const ref_name = cur_ref.token.content();
       const decl = tracker.get(ref_name);
       if(decl === undefined) {
@@ -236,6 +235,38 @@ export class ExprReader extends TokenReader {
   eval() : TypeInst {
     this.ast.doEval();
     return this.ast.type_data.used;
+  }
+  populateCallArgTypes(){
+    for(let cur_ref of this.references){
+      // is this a call statement?
+      const call_node = cur_ref.parent;
+      if(!(call_node instanceof CallNode)) continue;
+      // is this a function reference (check via nref to ensure it has a symbol => is a user function)
+      const decl = cur_ref.type_data.nref;
+      if(decl === undefined) continue;
+      const decl_fn = decl.type_data.ease(BDType.FuncRef);
+      if(decl_fn === undefined) continue;
+      const fn_info = decl_fn.func()!;
+
+      dm(`Call to ${fn_info.name}`);
+      for(let idx=0;idx<call_node.args.length;idx++){
+        if(idx >= fn_info.args.length) break;
+        const arg = call_node.args[idx];
+        if(arg.type_data.isUnknown()) continue;
+        const param = fn_info.args[idx];
+        if(param.inst === undefined) continue;
+        param.inst.union(arg.type_data.used)
+        if(!(param.wants instanceof Array)){
+          param.wants = (param.wants === BDType.Unknown) ? [] : [param.wants];
+        }
+        for(let arg_t of arg.type_data.used.getTypeOptions()){
+          if(!param.wants.includes(arg_t)){
+            dm(`Push type guess ${BDTypeNames[arg_t]} to arg ${param.name} of ${fn_info.name}`);
+            param.wants.push(arg_t);
+          }
+        }
+      }
+    }
   }
   teardown() {
     this.ast.teardown();

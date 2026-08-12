@@ -51,6 +51,7 @@ export interface ArgInfo {
   wants:BDType|BDType[],
   description?:string,
   opt?:boolean;
+  inst?:TypeInst;
 };
 export type VarInfo = {
   t:BDType.Number|BDType.Bool|BDType.String|BDType.Null|BDType.Unknown;
@@ -195,6 +196,12 @@ export class TypeInst {
   isUnknown(){
     const f = this.flattenUnion(BDType.Unknown);
     return f.t === BDType.Unknown || (f.t === BDType.Union && (f.data as TypeInst[]).length == 0);
+  }
+  getTypeOptions(){
+    if(this.t == BDType.Union){
+      return (this.data as TypeInst[]).map(alt=>alt.t);
+    }
+    return [this.t];
   }
   getT() { 
     return this.flattenUnion().t;
