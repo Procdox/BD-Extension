@@ -567,48 +567,69 @@ export class IndexNode extends ExprNode {
     this.addChild(this.index);
   }
   eval() {
-    let best_info:AnyInfo|TypeInst = {t:BDType.Unknown};
     const src_info = this.src.type_data;
-    const unk_index = this.index.type_data.isUnknown();
-    const num_index = unk_index || this.index.type_data.ease(BDType.Number);
-    const str_index = unk_index || this.index.type_data.ease(BDType.String);
-    let src_ease:TypeInst|undefined;
-    if((src_ease = src_info.ease(BDType.List)) !== undefined){
-      if(!num_index){
-        this.index.token.temp_issues.push("Indexes must be numbers for lists");
-      }
-      best_info = src_ease.elem()!;
-    }
-    else if(src_info.ease(BDType.String)){
-      if(!num_index){
-        this.index.token.temp_issues.push("Indexes must be numbers for strings");
-      }
-      best_info = {t:BDType.String};
-    }
-    else if((src_ease = src_info.ease(BDType.Object)) !== undefined){
-      if(!str_index){
-        this.index.token.temp_issues.push("Indexes must be strings for objects");
-      }
-      else if(this.index instanceof RawNode) {
-        const prop_name = this.index.token.content();
-        const prop_info = src_ease.props()!.get(prop_name)
-        if(prop_info === undefined){
-          this.index.token.temp_issues.push(`Object property ${prop_name} wasn't found`);
-        }
-        else {
-          best_info = prop_info;
-        }
-      }
-    }
-    else {
-      if(!str_index && !num_index){
-        this.index.token.temp_issues.push("Indexes must be either strings for objects, or numbers for lists/strings");
-      }
+    const src_lists = src_info.easeOptions(BDType.List);
+    const src_dicts = src_info.easeOptions(BDType.Object);
+    const src_str = src_info.ease(BDType.String);
+    const num_idx_allow = (src_lists.length > 0 || src_str !== undefined);
+    const str_idx_allow = src_dicts.length > 0;
+
+    if(!(num_idx_allow || str_idx_allow)){
+      this.type_data.setSrc({t:BDType.Unknown});
       if(!src_info.isUnknown()){
         this.index.token.temp_issues.push("Indexes are only valid for lists, objects, and strings");
       }
+      return;
     }
-    this.type_data.setSrc(best_info);
+    const idx_num = this.index.type_data.ease(BDType.Number);
+    const idx_str = this.index.type_data.ease(BDType.String);
+    if(!(idx_num !== undefined || idx_str !== undefined)){
+      this.type_data.setSrc({t:BDType.Unknown});
+      this.index.token.temp_issues.push("Indexes must be strings or numbers");
+      return;
+    }
+    if(idx_num === undefined && !str_idx_allow){
+      this.type_data.setSrc({t:BDType.Unknown});
+      this.index.token.temp_issues.push("Indexes must be numbers for lists and strings");
+      return;
+    }
+    if(idx_str === undefined && !num_idx_allow){
+      this.type_data.setSrc({t:BDType.Unknown});
+      this.index.token.temp_issues.push("Indexes must be strings for objects");
+      return;
+    }
+
+    // find possible return types
+    const can_be_string = (idx_num !== undefined && src_str !== undefined);
+    const list_ret_types:TypeInst[] = (idx_num !== undefined) ? src_lists.map(l=>l.elem()!) : [];
+    let dict_ret_types:(TypeInst|AnyInfo)[] = [];
+    if(idx_str !== undefined && this.index instanceof RawNode){
+      const prop_name = this.index.token.content();
+      for(let d of src_dicts){
+        const prop_info = d.props()!.get(prop_name);
+        if(prop_info !== undefined){
+          dict_ret_types.push(prop_info);
+        }
+      }
+      if(dict_ret_types.length == 0){
+        this.type_data.setSrc({t:BDType.Unknown});
+        this.index.token.temp_issues.push(`Object property ${this.index.token.content()} wasn't found`);
+        return;
+      }
+    }
+
+    // build the return type
+    const possible_types:(TypeInst|AnyInfo)[] = dict_ret_types.concat(list_ret_types);
+    if(can_be_string) possible_types.push({t:BDType.String});
+    if(possible_types.length == 0){
+      this.type_data.setSrc({t:BDType.Unknown});
+    }
+    else if(possible_types.length == 1){
+      this.type_data.setSrc(possible_types[0]);
+    }
+    else {
+      this.type_data.setSrc({t:BDType.Union, alts:possible_types});
+    }
   }
 }; 
 export class PropertyNode extends ExprNode {
@@ -633,10 +654,10 @@ export class PropertyNode extends ExprNode {
       return;
     }
     
-    const src_list = this.src.type_data.ease(BDType.List);
-    const src_dict = this.src.type_data.ease(BDType.Object);
+    const src_lists = this.src.type_data.easeOptions(BDType.List);
+    const src_dicts = this.src.type_data.easeOptions(BDType.Object);
     const src_string = this.src.type_data.ease(BDType.String);
-    if(!src_list && !src_dict && !src_string) {
+    if(src_lists.length == 0 && src_dicts.length == 0 && !src_string) {
       if(!this.src.type_data.isUnknown()){
         this.property.temp_issues.push("Properties can only be taken from lists, objects, and strings");
       }
@@ -645,45 +666,54 @@ export class PropertyNode extends ExprNode {
     }
 
     const prop_name = this.property.content();
+    let type_options:(AnyInfo|TypeInst)[] = [];
     
-    if(src_list){
+    if(src_lists.length > 0){
       const bi_info = LIST_PROPS.get(prop_name);
       if(bi_info !== undefined){
         if(prop_name == "pop"){
-          const elem = src_list.elem()!;
-          this.type_data.setSrc({...bi_info, ret:elem})
+          for(let l of src_lists){
+            const elem = l.elem()!;
+            type_options.push({...bi_info, ret:elem});
+          }
         }
         else {
-          this.type_data.setSrc(bi_info);
+          type_options.push(bi_info);
         }
-        this.src.setHover(src_list);
-        return;
       }
     }
     if(src_string){
       const bi_info = STRING_PROPS.get(prop_name);
       if(bi_info !== undefined){
         this.src.setHover(src_string);
-        this.type_data.setSrc(bi_info);
-        return;
+        type_options.push(bi_info);
       }
     }
-    if(src_dict){
+    if(src_dicts.length > 0){
       const bi_info = DICT_PROPS.get(prop_name);
       if(bi_info !== undefined){
-        this.src.setHover(src_dict);
-        this.type_data.setSrc(bi_info);
-        return;
+        type_options.push(bi_info);
       }
-      const user_info = src_dict.props()!.get(prop_name);
-      if(user_info !== undefined){
-        this.src.setHover(src_dict);
-        this.type_data.setSrc(user_info);
-        return;
+      else {
+        for(let d of src_dicts){
+          const user_info = d.props()!.get(prop_name);
+          if(user_info !== undefined){
+            type_options.push(user_info);
+          }
+        }
       }
     }
-    this.property.temp_issues.push(`Property ${prop_name} wasn't found`);
-    this.type_data.setSrc({t:BDType.Unknown});
+    if(type_options.length == 0){
+      this.property.temp_issues.push(`Property ${prop_name} wasn't found`);
+      this.type_data.setSrc({t:BDType.Unknown});
+    }
+    else if(type_options.length == 1){
+      this.type_data.setSrc(type_options[0]);
+    }
+    else {
+      this.type_data.setSrc({t:BDType.Union, alts:type_options});
+    }
+    //this.src.setHover(src_dict);
   }
 }; 
 

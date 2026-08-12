@@ -144,9 +144,28 @@ export class TypeInst {
         this.data = my_fn;
       }
       else if(src_info.t == BDType.Union){
-        this.data = src_info.alts.map((alt)=>{
-          return (force_clone || !(alt instanceof TypeInst)) ? new TypeInst(ctx, alt, force_clone) : alt;
-        });
+        const alts:TypeInst[] = [];
+        for(let alt of src_info.alts){
+          if(alts.some(known=>known.cmp(alt))) continue;
+          const added = (force_clone || !(alt instanceof TypeInst)) ? new TypeInst(ctx, alt, force_clone) : alt;
+          alts.push(added)
+        }
+        this.data = alts;
+      }
+    }
+    this.validate();
+  }
+  validate(){
+    if(this.t == BDType.Union){
+      for(let alt of (this.data as TypeInst[])){
+        if(alt.t == BDType.Union){
+          dm("Union Type contains nested Union")
+          throw new Error("Union Type contains nested Union");
+        }
+        if(alt.t == BDType.Unknown){
+          dm("Union Type contains Unknown")
+          throw new Error("Union Type contains Unknown");
+        }
       }
     }
   }
@@ -166,6 +185,12 @@ export class TypeInst {
   ease(t:BDType){
     const f = this.flattenUnion(t);
     if(f.t == t) return f;
+  }
+  easeOptions(t:BDType){
+    const f = this.flattenUnion(t);
+    if(f.t == t) return [f];
+    if(f.t == BDType.Union) return (f.data as TypeInst[]).filter(alt=>alt.t==t);
+    return [];
   }
   isUnknown(){
     const f = this.flattenUnion(BDType.Unknown);
@@ -279,6 +304,7 @@ export class TypeInst {
       t_alts.push(other);
       altered = true;
     }
+    this.validate();
     return altered;
   }
   private unionInfo(other:AnyInfo) : boolean {
@@ -312,6 +338,7 @@ export class TypeInst {
       t_alts.push(new TypeInst(this.ctx,other, false));
       altered = true;
     }
+    this.validate();
     return altered;
   }
   union(other:TypeInst|AnyInfo) : boolean {
@@ -337,5 +364,6 @@ export class TypeData {
     this.used = new TypeInst(this, this.src, false);
   }
   ease(t:BDType){ return this.used.ease(t); }
+  easeOptions(t:BDType) { return this.used.easeOptions(t); }
   isUnknown(){ return this.used.isUnknown(); }
 };
