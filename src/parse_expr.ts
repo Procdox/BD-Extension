@@ -43,6 +43,12 @@ export class TokenReader {
   }
 };
 
+export interface ExprIssue {
+  start:number;
+  end:number;
+  txt:string;
+}
+
 export class ExprReader extends TokenReader {
   references:NameNode[] = [];
   ast:ExprNode;
@@ -352,6 +358,7 @@ export abstract class ExprNode {
   eval_dirty:boolean = true;
   type_data:NodeTypeData;
   list_injected:Maybe<NodeTypeData> = undefined;
+  issues:ExprIssue[] = [];
   addChild(child:ExprNode){
     child.parent = this;
     this.children.push(child);
@@ -371,9 +378,20 @@ export abstract class ExprNode {
     this.dbg(depth);
     this.children.forEach(c=>c.recDbg(depth+1));
   }
+  abstract spanLeft() : number;
+  abstract spanRight() : number;
+  addIssue(span:ExprNode|Token, txt:string) {
+    let start:number = (span instanceof Token) ? span.pos : span.spanLeft();
+    let end:number = (span instanceof Token) ? span.pos + span.size : span.spanRight();
+    this.issues.push({start:start, end:end, txt:txt});
+  }
+  gatherIssues(result:ExprIssue[]){
+    result.push(...this.issues);
+    for(let child of this.children) child.gatherIssues(result);
+  }
   doEval(){
     if(!this.eval_dirty) return;
-    this.token.temp_issues = [];
+    this.issues = [];
     this.eval_dirty = false;
     this.children.forEach(c=>c.doEval());
     this.eval();
@@ -400,9 +418,9 @@ export class ErrNode extends ExprNode {
   constructor(token:Token){
     super(token);
   }
-  eval() {
-    this.token.temp_issues = [];
-  }
+  spanLeft() : number { return 0; }
+  spanRight() : number { return -1; }
+  eval() {}
   recDbg(depth:number){
     const pad = "  ".repeat(depth);
     dm(pad + "<MISSING>");
@@ -414,6 +432,8 @@ export class NameNode extends ExprNode {
     super(token);
     token.errorIfNot([TokenType.Name, TokenType.String]);
   }
+  spanLeft() : number { return this.token.pos; }
+  spanRight() : number { return this.token.pos + this.token.size; }
   eval() {
     if(this.type_data.nref){
       this.type_data.setRef(this.type_data.nref);
@@ -442,6 +462,8 @@ class RawNode extends ExprNode {
       this.type_data.setSrc({t:BDType.String});
     }
   }
+  spanLeft() : number { return this.token.pos; }
+  spanRight() : number { return this.token.pos + this.token.size; }
   eval() {}
 };
 class ListNode extends ExprNode {
@@ -451,6 +473,13 @@ class ListNode extends ExprNode {
     this.token.errorIfNot([TokenType.OpenSquare]);
     reader.parseList(this.elements, TokenType.CloseSquare, "Expected a ] at the end of a list literal");
     this.elements.forEach(elem=>this.addChild(elem));
+  }
+  spanLeft() : number { return this.token.pos; }
+  spanRight() : number { 
+    if(this.elements.length == 0){
+      return this.token.pos + this.token.size; 
+    }
+    return this.elements[this.elements.length-1].spanRight();
   }
   eval() {
     let type_options:TypeInst[] = [];
@@ -493,6 +522,13 @@ class DictNode extends ExprNode {
     reader.expectNext(TokenType.CloseCurly, "Expected a } at the end of a dict literal");
     this.elements.forEach(elem=>this.addChild(elem.value));
   }
+  spanLeft() : number { return this.token.pos; }
+  spanRight() : number { 
+    if(this.elements.length == 0){
+      return this.token.pos + this.token.size; 
+    }
+    return this.elements[this.elements.length-1].value.spanRight();
+  }
   eval() {
     const props:PropInfos = new Map<string,AnyInfo>();
     this.elements.forEach((prop)=>{
@@ -513,6 +549,13 @@ class CallNode extends ExprNode {
     this.addChild(this.src);
     this.args.forEach(arg=>this.addChild(arg));
   }
+  spanLeft() : number { return this.src.spanLeft(); }
+  spanRight() : number { 
+    if(this.args.length == 0){
+      return this.token.pos + this.token.size; 
+    }
+    return this.args[this.args.length-1].spanRight();
+  }
   eval() {
     if(this.list_injected){
       this.list_injected.markDirty(true, false);
@@ -525,7 +568,7 @@ class CallNode extends ExprNode {
     const func_info = this.src.type_data.used.func();
     if(func_info === undefined) {
       this.type_data.setSrc({t:BDType.Unknown});
-      this.token.temp_issues.push(`${this.src.token.content()} is not a function`);
+      this.addIssue(this.src, `${this.src.token.content()} is not a function`);
       return;
     }
     this.type_data.setSrc(func_info.ret, true);
@@ -533,7 +576,9 @@ class CallNode extends ExprNode {
     for(let idx = 0; idx < func_info.args.length; idx++){
       const api = func_info.args[idx];
       if(idx >= this.args.length){
-        if(api.opt !== true) this.token.temp_issues.push("Incorrect number of args");
+        if(api.opt !== true) {
+          this.addIssue(this, `Missing arg: ${api.name}`);
+        }
         break;
       }
       if(api.wants == BDType.Unknown) continue;
@@ -549,7 +594,7 @@ class CallNode extends ExprNode {
           return false;
         })){
           const expect_str = api.wants.map(api_t=>BDTypeNames[api_t]).join("/");
-          used.token.temp_issues.push(`Incorrect arg type. Expected ${expect_str}}`);
+          this.addIssue(used, `Incorrect arg type. Expected ${expect_str}`);
         }
       }
       else {
@@ -558,10 +603,14 @@ class CallNode extends ExprNode {
         }
         else {
           if(!used.type_data.ease(api.wants)){
-            used.token.temp_issues.push(`Incorrect arg type. Expected ${BDTypeNames[api.wants]}`);
+            this.addIssue(used, `Incorrect arg type. Expected ${BDTypeNames[api.wants]}`);
           }
         }
       }
+    }
+    if(this.args.length > func_info.args.length){
+      const arg_node = this.args[func_info.args.length];
+      this.addIssue(arg_node, `Too many args`);
     }
 
     // Special Case - Inject Type Data for list.append and list.insert
@@ -588,6 +637,8 @@ class CallNode extends ExprNode {
 export class IndexNode extends ExprNode {
   src:ExprNode;
   index:ExprNode;
+  spanLeft() : number { return this.src.spanLeft(); }
+  spanRight() : number { return this.index.spanRight(); }
   constructor(left:ExprNode, reader:ExprReader){
     super(reader.takeNext());
     this.token.errorIfNot([TokenType.OpenSquare]);
@@ -608,25 +659,29 @@ export class IndexNode extends ExprNode {
     if(!(num_idx_allow || str_idx_allow)){
       this.type_data.setSrc({t:BDType.Unknown});
       if(!src_info.isUnknown()){
-        this.index.token.temp_issues.push("Indexes are only valid for lists, objects, and strings");
+        this.addIssue(this.index, "Indexes are only valid for lists, objects, and strings");
       }
+      return;
+    }
+    if(this.index.type_data.isUnknown()){
+      this.type_data.setSrc({t:BDType.Unknown});
       return;
     }
     const idx_num = this.index.type_data.ease(BDType.Number);
     const idx_str = this.index.type_data.ease(BDType.String);
     if(!(idx_num !== undefined || idx_str !== undefined)){
       this.type_data.setSrc({t:BDType.Unknown});
-      this.index.token.temp_issues.push("Indexes must be strings or numbers");
+      this.addIssue(this.index, "Indexes must be strings or numbers");
       return;
     }
     if(idx_num === undefined && !str_idx_allow){
       this.type_data.setSrc({t:BDType.Unknown});
-      this.index.token.temp_issues.push("Indexes must be numbers for lists and strings");
+      this.addIssue(this.index, "Indexes must be numbers for lists and strings");
       return;
     }
     if(idx_str === undefined && !num_idx_allow){
       this.type_data.setSrc({t:BDType.Unknown});
-      this.index.token.temp_issues.push("Indexes must be strings for objects");
+      this.addIssue(this.index, "Indexes must be strings for objects");
       return;
     }
 
@@ -644,7 +699,7 @@ export class IndexNode extends ExprNode {
       }
       if(dict_ret_types.length == 0){
         this.type_data.setSrc({t:BDType.Unknown});
-        this.index.token.temp_issues.push(`Object property ${this.index.token.content()} wasn't found`);
+        this.addIssue(this.index, `Object property ${this.index.token.content()} wasn't found`);
         return;
       }
     }
@@ -674,12 +729,13 @@ export class PropertyNode extends ExprNode {
     this.addChild(left);
     this.type_data.tokens.push(this.property);
   }
+  spanLeft() : number { return this.src.spanLeft(); }
+  spanRight() : number { return this.property.pos + this.property.size; }
   dbg(depth:number){
     const pad = "  ".repeat(depth+1);
     dm(pad + this.token.dbg() + "("+this.property.dbg()+")");
   }
   eval() {
-    this.property.temp_issues = [];
     if(this.src.type_data.isUnknown()) {
       this.type_data.setSrc({t:BDType.Unknown});
       return;
@@ -690,7 +746,7 @@ export class PropertyNode extends ExprNode {
     const src_string = this.src.type_data.ease(BDType.String);
     if(src_lists.length == 0 && src_dicts.length == 0 && !src_string) {
       if(!this.src.type_data.isUnknown()){
-        this.property.temp_issues.push("Properties can only be taken from lists, objects, and strings");
+        this.addIssue(this.property, "Properties can only be taken from lists, objects, and strings");
       }
       this.type_data.setSrc({t:BDType.Unknown});
       return;
@@ -735,7 +791,7 @@ export class PropertyNode extends ExprNode {
       }
     }
     if(type_options.length == 0){
-      this.property.temp_issues.push(`Property ${prop_name} wasn't found`);
+      this.addIssue(this.property, `Property ${prop_name} wasn't found`);
       this.type_data.setSrc({t:BDType.Unknown});
     }
     else if(type_options.length == 1){
@@ -758,18 +814,20 @@ class UnaryNode extends ExprNode {
       parent.addChild(this)
     }
   }
+  spanLeft() : number { return this.token.pos; }
+  spanRight() : number { return this.right.spanRight(); }
   eval() {
     const rt = this.right.type_data;
     if(this.token.group == TokenType.Not){
       // TODO: implicit truth casting?
       if(!rt.ease(BDType.Bool) && !rt.isUnknown()){
-        this.right.token.temp_issues.push("Expected Boolean");
+        this.addIssue(this.right, "Expected Boolean");
       }
       this.type_data.setSrc({t:BDType.Bool});
     }
     else {
       if(!rt.ease(BDType.Number) && !rt.isUnknown()){
-        this.right.token.temp_issues.push("Expected Number");
+        this.addIssue(this.right, "Expected Number");
       }
       this.type_data.setSrc({t:BDType.Number});
     }
@@ -781,6 +839,8 @@ class BinaryNode extends ExprNode {
   constructor(token:Token){
     super(token);
   }
+  spanLeft() : number { return this.left.spanLeft(); }
+  spanRight() : number { return this.right.spanRight(); }
   finalize(){
     this.addChild(this.left);
     this.addChild(this.right);
@@ -802,10 +862,10 @@ class BinaryNode extends ExprNode {
     }
     if(this.token.group <= TokenType.RShift){
       if(!lt.ease(BDType.Number) && !lt.isUnknown()){
-        this.left.token.temp_issues.push("Expected Number");
+        this.addIssue(this.left, "Expected Number");
       }
       if(!rt.ease(BDType.Number) && !rt.isUnknown()){
-        this.right.token.temp_issues.push("Expected Number");
+        this.addIssue(this.right, "Expected Number");
       }
       this.type_data.setSrc({t:BDType.Number});
     }
@@ -829,12 +889,14 @@ class TernaryNode extends ExprNode {
     this.addChild(this.true_clause);
     this.addChild(this.false_clause);
   }
+  spanLeft() : number { return this.condition.spanLeft(); }
+  spanRight() : number { return this.false_clause.spanRight(); }
   eval() {
     const ct = this.condition.type_data;
     const tt = this.true_clause.type_data;
     const ft = this.false_clause.type_data;
     if(!ct.ease(BDType.Bool) && !ct.isUnknown()){
-      this.condition.token.temp_issues.push("Expected Boolean");
+      this.addIssue(this.condition, "Expected Boolean");
     }
     if(tt.isUnknown() || ft.isUnknown()){
       this.type_data.setSrc({t:BDType.Unknown});

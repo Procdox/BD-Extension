@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
 import { AnyInfo, ArgInfo, BDType, TokenNames, TokenType, TypeInst } from "./enums";
-import { ExprReader, IndexNode, NameNode, NodeTypeData, PropertyNode, } from './parse_expr';
+import { ExprIssue, ExprReader, IndexNode, NameNode, NodeTypeData, PropertyNode, } from './parse_expr';
 import { BUILTINS } from './builtins';
 import { Token, Tokenized } from './parse_tokens';
 import { Statement } from './parse_stmt';
@@ -103,10 +103,7 @@ export class Scope {
       }
       else if(stmt.t == TokenType.Elif || stmt.t == TokenType.Else){
         if(last_stmt_type != TokenType.If && last_stmt_type != TokenType.Elif){
-          stmt.tokens[0].temp_issues.push("Elif/Else statement must follow an If/Elif statment");
-        }
-        else {
-          stmt.tokens[0].temp_issues = [];
+          this.issues.push({l:focus.linenum, t:stmt.tokens[0], m:"Elif/Else statement must follow an If/Elif statment"})
         }
       }
       else if(stmt.t == TokenType.Return){
@@ -231,3 +228,23 @@ export class Scope {
     }
   }
 };
+
+export function buildLineIssues(line:LineData, issues:vscode.Diagnostic[]){
+  let expr_issues:ExprIssue[] = [];
+  line.tokens.forEach((token)=>{
+    const r = token.makeRange(line.linenum);
+    token.issues.forEach((issue)=>{
+      issues.push(new vscode.Diagnostic(r, issue));
+    });
+  });
+  if(line.stmt){
+    if(line.stmt.rval_expr) line.stmt.rval_expr.ast.gatherIssues(expr_issues);
+    if(line.stmt.lval_expr) line.stmt.lval_expr.ast.gatherIssues(expr_issues);
+    for(let expr_issue of expr_issues){
+      const s = new vscode.Position(line.linenum, expr_issue.start);
+      const e = new vscode.Position(line.linenum, expr_issue.end);
+      const r = new vscode.Range(s, e)
+      issues.push(new vscode.Diagnostic(r, expr_issue.txt));
+    }
+  }
+}

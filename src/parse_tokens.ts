@@ -16,8 +16,7 @@ export class Token {
   readonly pos:number;
   readonly size:number;
   hover_info:Maybe<TypeInst> = undefined;
-  issues:string[] = [] // issues internal to the line, that cannot be fixed by modifying other lines
-  temp_issues:string[] = []; // issues determined during AST eval
+  issues:string[] = [] // token parsing issues internal to the line, that cannot be fixed by modifying other lines
 
   constructor(pos:number, size:number, group:TokenType, value:string){
     this.group = group;

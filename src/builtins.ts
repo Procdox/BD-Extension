@@ -112,7 +112,7 @@ makeProp(BUILTINS, "type", "get variable type", [val_arg], {t:BDType.String});
 makeProp(BUILTINS, "get_param", "Read param value", [{name:"name", wants:BDType.String}, {name:"fallback", wants:BDType.String, opt:true}], {t:BDType.String});
 makeProp(BUILTINS, "parse_target", "Parse target string into object", [target_arg], makeRet([["user",{t:BDType.String}],["host",{t:BDType.String}]]));
 // Network
-makeProp(BUILTINS, "scan", "Check if a port is open", [], RET_SCAN);
+makeProp(BUILTINS, "scan", "Check if a port is open", [target_arg, port_arg], RET_SCAN);
 makeProp(BUILTINS, "connect", "Open a connection", [target_arg, port_arg, {...pwrd_arg, ...{opt:true}}], RET_CONNECT);
 makeProp(BUILTINS, "disconnect", "Close connection", [conn_arg], {t:BDType.Null});
 makeProp(BUILTINS, "get_target", "Mission Target {ip, hostname}", [], makeRet([["ip",{t:BDType.String}],["hostname",{t:BDType.String}]]));
@@ -157,7 +157,7 @@ makeProp(BUILTINS, "local_mkdir", "Create a directory on your local machine", [p
 makeProp(BUILTINS, "local_cp", "Copy a local file", [{name:"src", wants:BDType.String, description:"File to copy"}, {name:"dst", wants:BDType.String, description:"New location"}], {t:BDType.Bool});
 makeProp(BUILTINS, "local_mv", "Move/rename a local file", [{name:"src", wants:BDType.String, description:"File to move"}, {name:"dst", wants:BDType.String, description:"New location"}], {t:BDType.Bool});
 makeProp(BUILTINS, "local_rm", "Delete a local file", [path_arg], {t:BDType.Bool});
-BUILTINS.set("write_local", BUILTINS.get("read_local")!);
+BUILTINS.set("write_local", BUILTINS.get("save")!);
 
 // Shop - QuietGrab
 makeProp(BUILTINS, "file_type", "Check file type before download", [conn_arg, path_arg], {t:BDType.String});

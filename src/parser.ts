@@ -5,7 +5,7 @@ import { ExprReader, IndexNode, NameNode, PropertyNode, } from './parse_expr';
 import { BUILTINS } from './builtins';
 import { parseStatement, Statement } from './parse_stmt';
 import { parseTokens, Token, Tokenized } from './parse_tokens';
-import { FlowStmts, LineData, Scope, ScopeType } from './parse_scopes';
+import { buildLineIssues, FlowStmts, LineData, Scope, ScopeType } from './parse_scopes';
 
 function parseLine(text:string) : LineData {
   const token_data = parseTokens(text);
@@ -78,17 +78,7 @@ export class Parser {
   }
   rebuildIssues(){
     let issues:vscode.Diagnostic[] = [];
-    this.lines.forEach((line,idx)=>{
-      line.tokens.forEach((token)=>{
-        const r = token.makeRange(idx);
-        token.issues.forEach((issue)=>{
-          issues.push(new vscode.Diagnostic(r, issue));
-        });
-        token.temp_issues.forEach((issue)=>{
-          issues.push(new vscode.Diagnostic(r, issue));
-        });
-      });
-    });
+    this.lines.forEach((line)=> buildLineIssues(line, issues) );
     if(this.top_scope) this.top_scope.buildIssues(issues);
     return issues;
   }
