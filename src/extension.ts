@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { dm, Maybe } from './helpers';
 import { ArgInfo, BDType, BDTypeNames, FuncInfo, ListInfo, ObjInfo, TokenType, TypeInst, UnionInfo } from './enums';
 import { Parser } from './parser';
+import { NodeTypeData } from './parse_expr';
 
 const SELECTOR:vscode.DocumentSelector = { language: "bdscript", scheme: 'file' };
 
@@ -196,10 +197,27 @@ class ProvBD_Hover implements vscode.HoverProvider {
   }
 };
 
+class ProvBD_Define implements vscode.DefinitionProvider {
+  ctx:DocumentContext;
+  constructor(ctx:DocumentContext){
+    this.ctx = ctx;
+  }
+  provideDefinition(doc:vscode.TextDocument, pos:vscode.Position, cancel:vscode.CancellationToken) : vscode.ProviderResult<vscode.Definition | vscode.DefinitionLink[]>{
+    const tokenizer = this.ctx.get(doc);
+    if(tokenizer === undefined) return undefined;
+    const token = tokenizer.getToken(pos.line,pos.character);
+    if(token === undefined) return undefined;
+    const linked = token.decl_token;
+    if(linked === undefined) return undefined;
+    return new vscode.Location(doc.uri, linked.makeRange());
+  }
+};
+
 export function activate(vsc_ctx:vscode.ExtensionContext) {
   dm("Extension Activated");
   const doc_ctx = new DocumentContext();
   const hover_provider = new ProvBD_Hover(doc_ctx);
+  const define_provider = new ProvBD_Define(doc_ctx);
 
   if (vscode.window.activeTextEditor) {
     doc_ctx.setActive(vscode.window.activeTextEditor.document);
@@ -215,5 +233,7 @@ export function activate(vsc_ctx:vscode.ExtensionContext) {
     doc_ctx.changed(change_event);
   }));
   vsc_ctx.subscriptions.push(vscode.languages.registerHoverProvider(SELECTOR, hover_provider));
+
+  vsc_ctx.subscriptions.push(vscode.languages.registerDefinitionProvider(SELECTOR, define_provider));
 
 }

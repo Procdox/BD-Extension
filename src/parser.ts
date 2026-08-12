@@ -8,9 +8,10 @@ import { parseTokens, Token, Tokenized } from './parse_tokens';
 import { buildLineIssues, FlowStmts, LineData, Scope, ScopeType } from './parse_scopes';
 
 function parseLine(text:string) : LineData {
-  const token_data = parseTokens(text);
-  const stmt_data = parseStatement(token_data.tokens);
-  return {...token_data, linenum:0, stmt:stmt_data};
+  const data:LineData = {indent:0,linenum:-1,stmt:undefined,text:"",tokens:[]};
+  parseTokens(data, text);
+  data.stmt = parseStatement(data.tokens);
+  return data;
 }
 
 export class Parser {

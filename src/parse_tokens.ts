@@ -11,14 +11,17 @@ const LINT_NUMBER = /([0-9]+(?:\.[0-9]+)?)/gy
 const LINT_BAD = /\S+/gy
 
 export class Token {
+  private line_ctx:Tokenized;
   readonly group:TokenType;
   readonly value:string;
   readonly pos:number;
   readonly size:number;
   hover_info:Maybe<TypeInst> = undefined;
+  decl_token:Maybe<Token> = undefined;
   issues:string[] = [] // token parsing issues internal to the line, that cannot be fixed by modifying other lines
 
-  constructor(pos:number, size:number, group:TokenType, value:string){
+  constructor(line_ctx:Tokenized, pos:number, size:number, group:TokenType, value:string){
+    this.line_ctx = line_ctx;
     this.group = group;
     this.value = value;
     this.pos = pos;
@@ -38,14 +41,15 @@ export class Token {
   dbg(){ 
     return `${TokenNames[this.group]}:${this.value}`; 
   }
-  makeRange(line_idx:number){
-    const s = new vscode.Position(line_idx, this.pos);
+  makeRange(){
+    const s = new vscode.Position(this.line_ctx.linenum, this.pos);
     const r = new vscode.Range(s, s.translate(0,this.size))
     return r;
   }
 };
 
 export interface Tokenized {
+  linenum:number;
   text:string;
   indent:number;
   tokens:Token[];
@@ -54,9 +58,8 @@ export interface Tokenized {
 interface LintResult {pos:number,size:number,value:string};
 
 
-export function parseTokens(text:string) : Tokenized {
-  const indent = /^ */.exec(text)![0].length;
-  const tokens:Token[] = [];
+export function parseTokens(data:Tokenized, text:string)  {
+  data.indent = /^ */.exec(text)![0].length;
   var cur_pos = 0;
 
   function tryLint(re:RegExp) : Maybe<LintResult> {
@@ -81,23 +84,22 @@ export function parseTokens(text:string) : Tokenized {
     let r:Maybe<{pos:number,size:number,value:string}> = undefined;
     if( (r = tryLint(LINT_OPER)) != undefined ){
       const group = TokenNames.indexOf(r.value);
-      tokens.push(new Token(r.pos, r.size, group, r.value));
+      data.tokens.push(new Token(data, r.pos, r.size, group, r.value));
     }
     else if( (r = tryLint(LINT_NUMBER)) ){
-      tokens.push(new Token(r.pos, r.size, TokenType.Number, r.value));
+      data.tokens.push(new Token(data, r.pos, r.size, TokenType.Number, r.value));
     }
     else if( (r = tryLint(LINT_STRING)) ){
-      tokens.push(new Token(r.pos, r.size, TokenType.String, r.value));
+      data.tokens.push(new Token(data, r.pos, r.size, TokenType.String, r.value));
     }
     else if( (r = tryLint(LINT_NAME)) ){
-      tokens.push(new Token(r.pos, r.size, TokenType.Name, r.value));
+      data.tokens.push(new Token(data, r.pos, r.size, TokenType.Name, r.value));
     }
     else {
       if( (r = tryLint(LINT_BAD)) ){
-        tokens.push(new Token(r.pos, r.size, TokenType.Name, r.value));
+        data.tokens.push(new Token(data, r.pos, r.size, TokenType.Name, r.value));
       }
       break;
     }
   }
-  return {text:text, indent:indent, tokens:tokens};
 }

@@ -7,7 +7,6 @@ import { Token, Tokenized } from './parse_tokens';
 import { Statement } from './parse_stmt';
 
 export interface LineData extends Tokenized {
-  linenum:number;
   stmt:Maybe<Statement>;
 };
 
@@ -55,7 +54,7 @@ export class Scope {
   children:(Scope|LineData)[] = [];
   indent:number;
   unknown_refs:NameNode[] = [];
-  issues:{l:number, t:Token, m:string}[] = [];
+  issues:{t:Token, m:string}[] = [];
   return_type:Maybe<TypeInst> = undefined;
   
   constructor(t:ScopeType, indent:number, parent?:Scope){
@@ -73,7 +72,7 @@ export class Scope {
         if(focus.t == ScopeType.None){
           const bad_child = focus.children[0];
           if(!(bad_child instanceof Scope)){
-            focus.issues.push({l:bad_child.linenum, t:bad_child.tokens[0],m:"Unexpected indent"});
+            focus.issues.push({t:bad_child.tokens[0],m:"Unexpected indent"});
           }
         }
         continue;
@@ -83,13 +82,13 @@ export class Scope {
       let expr_result:AnyInfo|TypeInst = {t:BDType.Unknown};
 
       if(stmt.rval_expr){
-        stmt.rval_expr.resolveRefs(tracker, focus.linenum, this.issues);
+        stmt.rval_expr.resolveRefs(tracker, this.issues);
         expr_result = stmt.rval_expr.eval()
         stmt.rval_expr.populateCallArgTypes();
         //dm(`VarType: ${BDTypeNames[typeof expr_result === "number" ? expr_result : expr_result.t]} ... ${focus.text}`)
       }
       if(stmt.lval_expr){
-        stmt.lval_expr.resolveRefs(tracker, focus.linenum, this.issues);
+        stmt.lval_expr.resolveRefs(tracker, this.issues);
         stmt.lval_expr.evalRvalTarget(expr_result);
         stmt.lval_expr.eval();
         //dm(`VarType: ${BDTypeNames[typeof expr_result === "number" ? expr_result : expr_result.t]} ... ${focus.text}`)
@@ -103,7 +102,7 @@ export class Scope {
       }
       else if(stmt.t == TokenType.Elif || stmt.t == TokenType.Else){
         if(last_stmt_type != TokenType.If && last_stmt_type != TokenType.Elif){
-          this.issues.push({l:focus.linenum, t:stmt.tokens[0], m:"Elif/Else statement must follow an If/Elif statment"})
+          this.issues.push({t:stmt.tokens[0], m:"Elif/Else statement must follow an If/Elif statment"})
         }
       }
       else if(stmt.t == TokenType.Return){
@@ -219,7 +218,7 @@ export class Scope {
   }
   buildIssues(all_issues:vscode.Diagnostic[]){
     this.issues.forEach(my_issue =>{
-      const r = my_issue.t.makeRange(my_issue.l);
+      const r = my_issue.t.makeRange();
       all_issues.push(new vscode.Diagnostic(r, my_issue.m));
     });
     for(let child_idx = 0; child_idx < this.children.length; child_idx++){
@@ -232,7 +231,7 @@ export class Scope {
 export function buildLineIssues(line:LineData, issues:vscode.Diagnostic[]){
   let expr_issues:ExprIssue[] = [];
   line.tokens.forEach((token)=>{
-    const r = token.makeRange(line.linenum);
+    const r = token.makeRange();
     token.issues.forEach((issue)=>{
       issues.push(new vscode.Diagnostic(r, issue));
     });

@@ -183,7 +183,7 @@ export class ExprReader extends TokenReader {
     stack[0].finalize();
     return stack[0];
   }
-  resolveRefs(tracker:{get:(name:string)=> Maybe<ExprNode>}, actual_line:number, issues:{l:number, t:Token, m:string}[]){
+  resolveRefs(tracker:{get:(name:string)=> Maybe<ExprNode>}, issues:{t:Token, m:string}[]){
     for(let cur_ref of this.references){
       const ref_name = cur_ref.token.content();
       const decl = tracker.get(ref_name);
@@ -194,7 +194,7 @@ export class ExprReader extends TokenReader {
         }
         else {
           cur_ref.type_data.setSrc({t:BDType.Unknown},false,true);
-          issues.push({l:actual_line, t:cur_ref.token, m:"Reference to undeclared variable"});
+          issues.push({t:cur_ref.token, m:"Reference to undeclared variable"});
         }
       }
       else {
@@ -307,6 +307,7 @@ export class NodeTypeData extends TypeData {
     this.modifies = false;
     this.tref = undefined;
     this.nref = undefined;
+    this.tokens.forEach(t=>t.decl_token = undefined);
   }
   setSrc(info:AnyInfo|TypeInst, force_clone:boolean=false, mark_self:boolean=false){
     if(!force_clone && info instanceof TypeInst){
@@ -348,6 +349,7 @@ export class NodeTypeData extends TypeData {
   setRef(node:ExprNode){
     this.copySrc(node.type_data.used, true);
     this.nref = node;
+    this.tokens.forEach(t=>t.decl_token = node.token);
   }
 }
 
@@ -441,7 +443,7 @@ export class NameNode extends ExprNode {
   }
 };
 
-export const NULL_TOKEN = new Token(0,0,TokenType.Null,"");
+export const NULL_TOKEN = new Token({linenum:-1,tokens:[],indent:0,text:""}, 0, 0, TokenType.Null, "");
 export const NULL_NODE = new ErrNode(NULL_TOKEN);
 
 
