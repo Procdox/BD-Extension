@@ -59,7 +59,8 @@ class DocumentContext {
     }
   }
   changed(change_event:vscode.TextDocumentChangeEvent){
-    const doc = change_event.document;
+    this.setActive(change_event.document);
+    /*const doc = change_event.document;
     if(vscode.languages.match(SELECTOR, doc) <= 0) return;
     let parser:Maybe<Parser> = this.get(doc);
     if(parser === undefined){
@@ -89,7 +90,7 @@ class DocumentContext {
       dm("... posting issues");
       this.issues.clear();
       this.issues.set(doc.uri, parser.rebuildIssues());
-    }
+    }*/
   }
 };
 
@@ -134,7 +135,7 @@ function fmtUnionInfo(info:TypeInst){
   return "Union["+info.alts()!.map(alt=>BDTypeNames[alt.getT()]).join(", ")+"]"
 }
 
-function buildTypeName(info:TypeInst, depth:number) : string {
+function buildTypeName(info:TypeInst, depth:number, initial:boolean=false) : string {
   const f = info.flattenUnion();
   const t = f.getT();
   if(depth > 0) {
@@ -143,7 +144,11 @@ function buildTypeName(info:TypeInst, depth:number) : string {
       return ""+f.alts()!.map(alt=>buildTypeName(alt, depth-1)).join("/")
     }
     else if(t === BDType.FuncRef){
-      return "(" + f.func()!.args.map(arg=>arg.name).join(", ") + ") -> " + buildTypeName(f.func()!.ret, depth-1);
+      var content = "(" + f.func()!.args.map(arg=>arg.name).join(", ") + ") -> " + buildTypeName(f.func()!.ret, depth-1);
+      if(initial){
+        content = `### ${f.func()!.name}${content}\n${f.func()!.description}`
+      }
+      return content
     }
     else if(t === BDType.List){
       const e = f.elem()!.flattenUnion();
@@ -177,7 +182,7 @@ class ProvBD_Hover implements vscode.HoverProvider {
     if(token_info === undefined) return undefined;
     let content:string[] = [];
     const t = token_info.getT();
-    return new vscode.Hover(buildTypeName(token_info,3));
+    return new vscode.Hover(buildTypeName(token_info,3,true));
     /*if(t == BDType.Object){
       content.push("### Object\n"+fmtObjectDetails(token_info));
     }

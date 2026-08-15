@@ -111,6 +111,7 @@ makeProp(BUILTINS, "int", "cast to number", [val_arg], {t:BDType.Number});
 makeProp(BUILTINS, "type", "get variable type", [val_arg], {t:BDType.String});
 makeProp(BUILTINS, "get_param", "Read param value", [{name:"name", wants:BDType.String}, {name:"fallback", wants:BDType.String, opt:true}], {t:BDType.String});
 makeProp(BUILTINS, "parse_target", "Parse target string into object", [target_arg], makeRet([["user",{t:BDType.String}],["host",{t:BDType.String}]]));
+makeProp(BUILTINS, "exit", "Immediately end script", [], {t:BDType.Null});
 // Network
 makeProp(BUILTINS, "scan", "Check if a port is open", [target_arg, port_arg], RET_SCAN);
 makeProp(BUILTINS, "connect", "Open a connection", [target_arg, port_arg, {...pwrd_arg, ...{opt:true}}], RET_CONNECT);

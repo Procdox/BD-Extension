@@ -232,6 +232,7 @@ export class ExprReader extends TokenReader {
       }
     }
     else {
+      if(expr_info instanceof TypeInst ? expr_info.isUnknown() : expr_info.t == BDType.Unknown ) return;
       if(src_node.type_data.used.union(expr_info)){
         src_node.type_data.modifies = true;
         (src_node.type_data.used.ctx as NodeTypeData).markDirty(false,true);
@@ -567,12 +568,18 @@ class CallNode extends ExprNode {
       this.type_data.setSrc({t:BDType.Unknown});
       return;
     }
-    const func_info = this.src.type_data.used.func();
-    if(func_info === undefined) {
+    const src_fns = this.src.type_data.easeOptions(BDType.FuncRef);
+    if(src_fns.length == 0){
       this.type_data.setSrc({t:BDType.Unknown});
       this.addIssue(this.src, `${this.src.token.content()} is not a function`);
       return;
     }
+    if(src_fns.length > 1){
+      this.type_data.setSrc({t:BDType.Unknown});
+      this.addIssue(this.src, `${this.src.token.content()} is ambiguous`);
+      return;
+    }
+    const func_info = src_fns[0].func()!;
     this.type_data.setSrc(func_info.ret, true);
     
     for(let idx = 0; idx < func_info.args.length; idx++){
@@ -666,6 +673,23 @@ export class IndexNode extends ExprNode {
       return;
     }
     if(this.index.type_data.isUnknown()){
+      // special case to help with Record types
+      if(src_dicts.length == 1 && src_str === undefined && src_lists.length == 0){
+        let dict_field_union:(TypeInst|AnyInfo)[] = [];
+        for(let prop_info of src_dicts[0].props()!.values()){
+          dict_field_union.push(prop_info);
+        }
+        if(dict_field_union.length == 0){
+          this.type_data.setSrc({t:BDType.Unknown});
+        }
+        else if(dict_field_union.length == 1){
+          this.type_data.setSrc(dict_field_union[0]);
+        }
+        else {
+          this.type_data.setSrc({t:BDType.Union, alts:dict_field_union});
+        }
+        return;
+      }
       this.type_data.setSrc({t:BDType.Unknown});
       return;
     }
@@ -691,18 +715,39 @@ export class IndexNode extends ExprNode {
     const can_be_string = (idx_num !== undefined && src_str !== undefined);
     const list_ret_types:TypeInst[] = (idx_num !== undefined) ? src_lists.map(l=>l.elem()!) : [];
     let dict_ret_types:(TypeInst|AnyInfo)[] = [];
-    if(idx_str !== undefined && this.index instanceof RawNode){
-      const prop_name = this.index.token.content();
-      for(let d of src_dicts){
-        const prop_info = d.props()!.get(prop_name);
-        if(prop_info !== undefined){
-          dict_ret_types.push(prop_info);
+    if(idx_str !== undefined){
+      if(this.index instanceof RawNode){
+        const prop_name = this.index.token.content();
+        for(let d of src_dicts){
+          const prop_info = d.props()!.get(prop_name);
+          if(prop_info !== undefined){
+            dict_ret_types.push(prop_info);
+          }
+        }
+        if(dict_ret_types.length == 0){
+          this.type_data.setSrc({t:BDType.Unknown});
+          this.addIssue(this.index, `Object property ${this.index.token.content()} wasn't found`);
+          return;
         }
       }
-      if(dict_ret_types.length == 0){
-        this.type_data.setSrc({t:BDType.Unknown});
-        this.addIssue(this.index, `Object property ${this.index.token.content()} wasn't found`);
-        return;
+      else{
+        // special case to help with Record types
+        if(src_dicts.length == 1 && src_str === undefined && src_lists.length == 0){
+          let dict_field_union:(TypeInst|AnyInfo)[] = [];
+          for(let prop_info of src_dicts[0].props()!.values()){
+            dict_field_union.push(prop_info);
+          }
+          if(dict_field_union.length == 0){
+            this.type_data.setSrc({t:BDType.Unknown});
+          }
+          else if(dict_field_union.length == 1){
+            this.type_data.setSrc(dict_field_union[0]);
+          }
+          else {
+            this.type_data.setSrc({t:BDType.Union, alts:dict_field_union});
+          }
+          return;
+        }
       }
     }
 
