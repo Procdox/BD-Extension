@@ -1,0 +1,116 @@
+openapi: 3.1.0
+info:
+  title: Blackdoor API
+  version: 0.0.1
+  description: |-
+    This API provides endpoints for external editors and tools to manipulate a restricted subset of files within Blackdoor.
+    The goal is to allow external editors to push/pull user created source files.
+
+    All file paths are relative to a new in-game directory on the home system. "/mnt" is the suggested dir name. 
+    The user may manually interact with this subtree as normal.
+    Scripts can only import or read from this subtree, they cannot write to it. 
+    This is to avoid automating exfiltration of in-game data to external tools
+paths:
+  /v1/files/{filePath}:
+    get:
+      operationId: getNode
+      summary: Get a json object containing the metadata and content for an in-game file
+      tags:
+        - nodes
+      parameters:
+        - name: filePath
+          in: path
+          description: a path relative to the new in-game "/mnt" directory
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/GetResponse"
+    post:
+      operationId: setNode
+      summary: Add or replace an in-game file
+      tags:
+        - nodes
+      parameters:
+        - name: filePath
+          in: path
+          description: a path relative to the new in-game "/mnt" directory
+          required: true
+          schema:
+            type: string
+      requestBody:
+        $ref: '#/components/requestBodies/CreateRequest'
+      responses:
+        "200":
+          $ref: "#/components/responses/ChangeResponse"
+    delete:
+      operationId: remNode
+      summary: Remove an in-game file
+      tags:
+        - nodes
+      parameters:
+        - name: filePath
+          in: path
+          description: a path relative to the new in-game "/mnt" directory
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/ChangeResponse"
+components:
+  schemas:
+    FileNode:
+      type: object
+      required:
+        - nodeType
+        - content
+      properties:
+        nodeType:
+          type: string
+          enum: [FILE]
+        content:
+          type: string
+    DirNode:
+      type: object
+      required:
+        - nodeType
+      properties:
+        nodeType:
+          type: string
+          enum: [DIR]
+    Node:
+      oneOf:
+        - $ref: "#/components/schemas/FileNode"
+        - $ref: "#/components/schemas/DirNode"
+      discriminator:
+        propertyName: nodeType
+
+  requestBodies:
+    CreateRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Node"
+  responses:
+    GetResponse:
+      description: Response from node GET requests
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Node"
+    ChangeResponse:
+      description: Response from node POST/DELETE requests
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              rval:
+                type: number
+                description: return code for the operation, 0 is OKAY, other values may encode specific errors or warnings
+              reason:
+                type: string
+                description: human readable explanation of a non-0 rval
