@@ -59,6 +59,17 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/ChangeResponse"
+  /v1/updates:
+    post:
+      operationId: getUpdates
+      summary: Return a list of files that have been modified since a timestamp (not inclusive)
+      tags:
+        - nodes
+      requestBody:
+        $ref: '#/components/requestBodies/UpdateRequest'
+      responses:
+        "200":
+          $ref: "#/components/responses/UpdateResponse"
 components:
   schemas:
     FileNode:
@@ -66,12 +77,18 @@ components:
       required:
         - nodeType
         - content
+        - lastEdit
       properties:
         nodeType:
           type: string
           enum: [FILE]
         content:
           type: string
+        lastEdit:
+          type: number
+          description: |-
+            unix time stamp indicating the last time the file contents were modified
+            for creation requests the value is ignored and the game authors the field with its own clock
     DirNode:
       type: object
       required:
@@ -94,15 +111,26 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Node"
+    UpdateRequest:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - timeStamp
+            properties:
+              timeStamp:
+                type: number
   responses:
     GetResponse:
-      description: Response from node GET requests
+      description: Response from files GET requests
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Node"
     ChangeResponse:
-      description: Response from node POST/DELETE requests
+      description: Response from files POST/DELETE requests
       content:
         application/json:
           schema:
@@ -114,3 +142,20 @@ components:
               reason:
                 type: string
                 description: human readable explanation of a non-0 rval
+              lastEdit:
+                type: number
+                description: when a change is successful, the server returns the time it made the change
+    UpdateResponse:
+      description: Response from updates POST requests
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - paths
+            properties:
+              paths:
+                type: array
+                description: an array of file paths with lastEdit time stamps greater than the request time stamp
+                items:
+                  type: string
