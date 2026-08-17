@@ -4,6 +4,8 @@ Adds support for Blackdoor's scripting language.
 
 The game can be found here: https://store.steampowered.com/app/4562430/Blackdoor/
 
+There is not yet a way to interact with the game client directly, so moving scripts must be done manually via copy/paste.
+
 ## Features
 - Syntax highlighting
 - Hover tooltips for API functions
@@ -13,9 +15,12 @@ The game can be found here: https://store.steampowered.com/app/4562430/Blackdoor
 - Go-To Declaration
 
 ## Setup from Source
-- Run `npm install` in the terminal
-- Compile the project with the `npm: compile` vscode task
-- Launch a new vscode instance with the `Launch Extension` vscode debug config
+- If you haven't already, install npm
+- Download this project and open it in VSCode
+- In the VSCode terminal, run `npm install` to setup the project dependencies
+- Compile this project via the menu option `Terminal -> Run Build Task` or keyboard shortcut `Ctrl + Shift + B`
+- Launch a debug session via the menu option `Run -> Start Debugging` or keyboard shortcut `F5`
+- This will launch a second VSCode window with the extension installed temporarily. The extension will activate for any file with a `.bd` extension.
 
 ## Todo
 - add detection for function/variable shadowing builtin/api
